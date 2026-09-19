@@ -1,0 +1,1197 @@
+
+esphome:
+  name: e-paper-infoscreen
+  friendly_name: E-paper Infoscreen
+
+  on_boot:
+    then:
+      # read the RTC time once when the system boots
+      pcf85063.read_time:
+
+esp32:
+  board: esp-wrover-kit
+  flash_size: 16MB
+  cpu_frequency: 240MHz
+  framework:
+    type: esp-idf
+    advanced: 
+      minimum_chip_revision: "3.0"
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/karlg100/esphome-display-screenshot
+      ref: inkplate-support
+    components: [display_capture]
+    refresh: always
+
+  # equivalent shorthand for GitHub
+#  - source: github://karlg100/esphome@dev
+#  - source: github://karlg100/esphome@inkplatedisplay_sleep_buffer
+#    components: [ inkplate6 ]
+#    refresh: always
+
+logger:
+#  level: VERBOSE
+#  logs:
+#    inkplate: VERBOSE
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  use_address: 192.168.1.138
+  fast_connect: true
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+#  ap:
+#    ssid: "E-Paper-Infoscreen"
+#    password: !secret e_paper_infoscreen_fallback_password
+
+#captive_portal:
+
+web_server:
+  port: 80
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret e_paper_infoscreen_api_key
+#  on_client_connected:
+#    - component.update: inkplate_display
+#  on_client_disconnected:
+#    - component.update: inkplate_display
+
+ota:
+  - platform: esphome
+    password: !secret e_paper_infoscreen_ota_password
+
+time:
+  - platform: pcf85063
+    id: esptime
+    # repeated synchronization is not necessary unless the external RTC
+    # is much more accurate than the internal clock
+    update_interval: never
+  - platform: homeassistant
+    # instead try to synchronize via network repeatedly ...
+    on_time_sync:
+      then:
+        # ... and update the RTC when the synchronization was successful
+        pcf85063.write_time:
+#time:
+#  - platform: sntp
+#    id: esptime
+
+psram:
+
+deep_sleep:
+#  run_duration: alwasy
+  id: deep_sleep_1
+  sleep_duration: 10s
+  wakeup_pin: GPIO36
+  wakeup_pin_mode: INVERT_WAKEUP
+i2c:
+
+pca6416a:
+  - id: pca6416a_hub
+    address: 0x20
+  - id: pca6416a_hub2
+    address: 0x21
+
+####
+# Switches to expose in HA
+##
+
+switch:
+  - platform: restart
+    name: "Inkplate Reboot"
+    id: reboot
+
+  - platform: gpio
+    id: battery_read_mosfet
+    pin:
+      pca6416a: pca6416a_hub
+      number: 9
+      #inverted: true
+
+#  - platform: homeassistant
+#    name: "Inkplate Cache Values"
+#    id: cache_values
+#    entity_id: switch.inkplate_cache_values
+#    restore_mode: RESTORE_DEFAULT_OFF
+
+#  - platform: template
+#    name: "Inkplate Greyscale mode"
+#    lambda: return id(inkplate_display).get_greyscale();
+#    turn_on_action:
+#      - lambda: id(inkplate_display).set_greyscale(true);
+#    turn_off_action:
+#      - lambda: id(inkplate_display).set_greyscale(false);
+#    restore_mode: RESTORE_DEFAULT_OFF
+
+  - platform: template
+    name: "Inkplate Partial Updating"
+    lambda: return id(inkplate_display).get_partial_updating();
+    turn_on_action:
+      - lambda: id(inkplate_display).set_partial_updating(true);
+    turn_off_action:
+      - lambda: id(inkplate_display).set_partial_updating(false);
+#    restore_mode: RESTORE_DEFAULT_OFF
+
+button:
+  - platform: template
+    name: Update display
+    icon: mdi:update
+    id: update_display
+    on_press:
+      - logger.log: "e-ink display updating"
+      - component.update: inkplate_display
+
+  - platform: template
+    name: Deep Sleep display
+    icon: mdi:sleep
+    id: deepsleep_display
+    on_press:
+      - logger.log: "e-ink display entering deep sleep"   
+      - deep_sleep.enter: deep_sleep_1
+
+  - platform: template
+    name: Execute Main Loop
+    icon: mdi:run-fast
+    id: run_mainloop
+    on_press:
+      - script.execute: mainLoop
+
+####
+# Sensors to push to HA
+##
+
+
+sensor:
+  - platform: homeassistant
+    id: refresh_count
+    entity_id: input_number.e_ink_refresh_count
+    #restore_data: true
+
+  - platform: template
+    name: "Wakeup Cause"
+    accuracy_decimals: 0
+    lambda: return esp_sleep_get_wakeup_cause();
+
+  - platform: adc
+    pin: 35
+    id: battery_voltage_adc
+    name: "Voltage"
+#    update_interval: 1s
+    update_interval: never
+    #internal: true
+    accuracy_decimals: 2
+    attenuation: 12dB
+    samples: 10
+    entity_category: "diagnostic"
+    device_class: "voltage"
+    filters:
+      # transform the raw value (voltage divider) to actual voltage:
+#      - multiply: 2.04
+      # remove outliers (voltage spikes only):
+      - quantile:
+          window_size: 7
+          send_every: 4
+          send_first_at: 3
+          quantile: .25
+    # automatically enter deep-sleep below 3.2V:
+#    on_value_range:
+#      below: 3.2
+#      then:
+#        - text_sensor.template.publish:
+#            id: sleep_state
+#            state: "Deep Sleep (low voltage)"
+#        - script.execute: prepare_for_sleep
+
+  - platform: template
+    name: "Inkplate Battery Voltage"
+    id: battery_voltage
+    unit_of_measurement: "V"
+    accuracy_decimals: 3
+    lambda: |-
+      id(battery_read_mosfet).turn_on();
+      delay(5);
+      float adc = id(battery_voltage_adc).sample();
+      id(battery_read_mosfet).turn_off();
+      return adc;
+    update_interval: never
+    #update_interval: 5sec
+    filters:
+      - multiply: 2.04
+    on_value:
+      then:
+        - component.update: battery_percent
+        - component.update: battery_status
+
+  - platform: template
+    name: "Battery %"
+    id: battery_percent
+    lambda: return id(battery_voltage).state;
+    update_interval: never
+    accuracy_decimals: 0
+    unit_of_measurement: "%"
+    icon: mdi:battery-medium    
+    entity_category: "diagnostic"
+    device_class: "battery"
+    filters:
+      # map battery voltages to associated SOC percentages:
+      - calibrate_linear:
+         method: exact
+         datapoints:
+          - 0.00 -> 0.0
+          - 3.30 -> 1.0
+          - 3.39 -> 10.0
+          - 3.75 -> 50.0
+          - 4.08 -> 97.0
+          - 4.11 -> 99.0
+          - 4.20 -> 100.0
+      # cap at 100%
+      - clamp:
+          min_value: 0
+          max_value: 100
+          ignore_out_of_range: true
+      # remove outliers (both directions):
+      - median:
+          window_size: 7
+          send_every: 4
+          send_first_at: 3
+
+  ####
+  # Weather Data Sensors
+  ##
+  # current
+  - platform: homeassistant
+    entity_id: weather.khie
+    id: khie_temp
+    attribute: temperature
+    internal: true
+    #restore_data: true
+
+  - platform: homeassistant
+    entity_id: weather.khie
+    id: khie_humidity
+    attribute: humidity
+    internal: true
+    #restore_data: true
+
+  - platform: homeassistant
+    id: cur_temp
+    entity_id: sensor.current_temperature
+    internal: true
+    #restore_data: true
+
+  - platform: homeassistant
+    id: wind_chill
+    entity_id: sensor.knhlanca3_wind_chill
+    internal: true
+    #restore_data: true
+
+  - platform: homeassistant
+    id: heat_index
+    entity_id: sensor.knhlanca3_heat_index
+    internal: true
+
+  - platform: homeassistant
+    id: cur_humidity
+    entity_id: sensor.current_humidity
+    internal: true
+    #restore_data: true
+
+  - platform: homeassistant
+    id: cur_pressure
+    entity_id: sensor.current_pressure
+    internal: true
+    #restore_data: true
+
+  - platform: homeassistant
+    id: cur_visability
+    entity_id: sensor.current_visability
+    internal: true
+    #restore_data: true
+
+  - platform: homeassistant
+    id: cur_wind_gusts
+    entity_id: sensor.current_wind_gusts
+    internal: true
+    #restore_data: true
+
+  - platform: homeassistant
+    entity_id: sensor.current_wind_speed
+    id: current_wind_speed
+    internal: true
+    #restore_data: true
+ 
+  - platform: homeassistant
+    entity_id: sensor.current_wind_bearing
+    id: wind_bearing
+    internal: true
+    #restore_data: true
+
+  - platform: homeassistant
+    entity_id: sensor.mountain_house_forecast_precipitation
+    id: precip_forecast
+    internal: true
+    #restore_data: true
+
+#  - platform: homeassistant
+#    entity_id: weather.khie
+#    id: current_wind_direction
+#    attribute: wind_bearing
+
+  - platform: template
+    name: "Weather Underground Real Feel"
+    id: cur_realfeel_temp
+    unit_of_measurement: "°F"
+    accuracy_decimals: 1
+    lambda: |-
+      // Check if all sensors have valid data to avoid 'NaN' errors
+      if (id(cur_temp).has_state() && id(wind_chill).has_state() && id(heat_index).has_state()) {
+        float temp = id(cur_temp).state;
+        
+        // Logic: Use Wind Chill if cold, Heat Index if hot, otherwise Air Temp
+        if (temp <= 50.0) {
+          return id(wind_chill).state;
+        } else if (temp >= 80.0) {
+          return id(heat_index).state;
+        } else {
+          return temp;
+        }
+      }
+      return NAN;
+#    update_interval: 60s
+    internal: true
+
+
+# day 1
+  - platform: homeassistant
+    id: d0_temp_high
+    entity_id: sensor.forecast_day_1_temperature_high
+
+  - platform: homeassistant
+    id: d0_temp_low
+    entity_id: sensor.forecast_day_1_temperature_low
+
+  - platform: homeassistant
+    id: d0_realfeel_temp_high
+    entity_id: sensor.mountain_house_forecast_realfeel_temperature_max_day_0
+
+  - platform: homeassistant
+    id: d0_realfeel_temp_low
+    entity_id: sensor.mountain_house_forecast_realfeel_temperature_min_day_0
+
+  - platform: homeassistant
+    id: d0_wind_speed
+    entity_id: sensor.forecast_day_1_wind_speed
+
+  - platform: homeassistant
+    id: d0_wind_gusts
+    entity_id: sensor.forecast_day_1_wind_gusts
+
+  - platform: homeassistant
+    id: cloud_ceiling
+    entity_id: sensor.mountain_house_forecast_cloud_ceiling
+
+# hourly
+  - platform: homeassistant
+    id: h1_temp
+    entity_id: sensor.temperature_forecast_h1
+
+  - platform: homeassistant
+    id: h2_temp
+    entity_id: sensor.temperature_forecast_h2
+
+  - platform: homeassistant
+    id: h3_temp
+    entity_id: sensor.temperature_forecast_h3
+
+  - platform: homeassistant
+    id: h4_temp
+    entity_id: sensor.temperature_forecast_hour_4
+
+  - platform: homeassistant
+    id: h5_temp
+    entity_id: sensor.temperature_forecast_hour_5
+
+# hot tub
+  - platform: homeassistant
+    id: hottub_temp
+    entity_id: climate.stargazer_s_spa_thermostat_1
+    attribute: current_temperature
+
+  - platform: homeassistant
+    id: hottub_setpoint
+    entity_id: climate.stargazer_s_spa_thermostat_1
+    attribute: hvac_action
+
+text_sensor:
+# log system state: running or deep sleep (and reason)
+  - platform: template
+    name: "DeepSleep State"
+    id: sleep_state
+    icon: "mdi:power-sleep"
+    entity_category: "diagnostic"
+    device_class: ""
+
+  # log power mode: USB or battery
+  - platform: template
+    name: "Battery Status"
+    id: battery_status
+    update_interval: never
+    entity_category: "diagnostic"
+    device_class: ""
+    icon: mdi:power-plug-battery
+    lambda: |-
+      if (id(battery_voltage).state > 4.74) {
+        return {"USB"};
+      } else if (id(battery_voltage).state > 4.18) {
+        if (id(battery_voltage).state > 4.5) {
+           return {"Constant Voltage"};
+        } else {
+           return {"Constant Current"};
+        }
+      } else {
+        return {"Battery"};
+      }
+
+# hot tub
+  - platform: homeassistant
+    id: hottub_action
+    entity_id: climate.stargazer_s_spa_thermostat_1
+    attribute: hvac_action
+
+# weather
+  - platform: homeassistant
+    id: cur_conditions
+    entity_id: weather.mountain_house_forecast
+
+  - platform: homeassistant
+    id: cur_forecast
+    entity_id: sensor.chatgpt_forecast_8_hours
+    #entity_id: sensor.mountain_house_forecast_condition_day_0
+   
+  - platform: homeassistant
+    id: d0_conditions
+    entity_id: sensor.forecast_d1_weather
+
+  - platform: homeassistant
+    id: d1_conditions
+    entity_id: sensor.forecast_d2_weather
+
+  - platform: homeassistant
+    id: d2_conditions
+    entity_id: sensor.forecast_d3_weather
+
+  - platform: homeassistant
+    id: d3_conditions
+    entity_id: sensor.forecast_d4_weather
+
+  - platform: homeassistant
+    id: d4_conditions
+    entity_id: sensor.forecast_d5_weather
+
+  # Hourly conditions
+  - platform: homeassistant
+    id: h1_conditions
+    entity_id: sensor.forecast_hour_1_weather
+
+  - platform: homeassistant
+    id: h1_hour
+    entity_id: sensor.forecast_hour_1_weather
+    attribute: time
+
+  - platform: homeassistant
+    id: h2_conditions
+    entity_id: sensor.weather_forecast_h2_2
+
+  - platform: homeassistant
+    id: h2_hour
+    entity_id: sensor.weather_forecast_h2_2
+    attribute: time
+
+  - platform: homeassistant
+    id: h3_conditions
+    entity_id: sensor.weather_forecast_h3_2
+
+  - platform: homeassistant
+    id: h3_hour
+    entity_id: sensor.weather_forecast_h3_2
+    attribute: time
+
+  - platform: homeassistant
+    id: h4_conditions
+    entity_id: sensor.weather_forecast_hour_4
+
+  - platform: homeassistant
+    id: h4_hour
+    entity_id: sensor.weather_forecast_hour_4
+    attribute: time
+
+  - platform: homeassistant
+    id: h5_conditions
+    entity_id: sensor.weather_forecast_hour_5
+
+  - platform: homeassistant
+    id: h5_hour
+    entity_id: sensor.weather_forecast_hour_5
+    attribute: time
+
+  - platform: template
+    name: "Wind Direction"
+    update_interval: never
+    id: current_wind_direction
+    lambda: |-
+      if (id(wind_bearing).state >= 348.75 || id(wind_bearing).state < 11.25) {
+        return std::string("N");
+      } else if (id(wind_bearing).state >= 11.25 && id(wind_bearing).state < 33.75) {
+        return std::string("NNE");
+      } else if (id(wind_bearing).state >= 33.75 && id(wind_bearing).state < 56.25) {
+        return std::string("NE");
+      } else if (id(wind_bearing).state >= 56.25 && id(wind_bearing).state < 78.75) {
+        return std::string("ENE");
+      } else if (id(wind_bearing).state >= 78.75 && id(wind_bearing).state < 101.25) {
+        return std::string("E");
+      } else if (id(wind_bearing).state >= 101.25 && id(wind_bearing).state < 123.75) {
+        return std::string("ESE");
+      } else if (id(wind_bearing).state >= 123.75 && id(wind_bearing).state < 146.25) {
+        return std::string("SE");
+      } else if (id(wind_bearing).state >= 146.25 && id(wind_bearing).state < 168.75) {
+        return std::string("SSE");
+      } else if (id(wind_bearing).state >= 168.75 && id(wind_bearing).state < 191.25) {
+        return std::string("S");
+      } else if (id(wind_bearing).state >= 191.25 && id(wind_bearing).state < 213.75) {
+        return std::string("SSW");
+      } else if (id(wind_bearing).state >= 213.75 && id(wind_bearing).state < 236.25) {
+        return std::string("SW");
+      } else if (id(wind_bearing).state >= 236.25 && id(wind_bearing).state < 258.75) {
+        return std::string("WSW");
+      } else if (id(wind_bearing).state >= 258.75 && id(wind_bearing).state < 281.25) {
+        return std::string("W");
+      } else if (id(wind_bearing).state >= 281.25 && id(wind_bearing).state < 303.75) {
+        return std::string("WNW");
+      } else if (id(wind_bearing).state >= 303.75 && id(wind_bearing).state < 326.25) {
+        return std::string("NW");
+      } else if (id(wind_bearing).state >= 326.25 && id(wind_bearing).state < 348.75) {
+        return std::string("NNW");
+      } else {
+        return std::string("Unknown");
+      }
+
+
+binary_sensor:
+  - platform: status
+    name: "Inkplate Status"
+    id: system_status
+#  - platform: gpio
+#    name: "Inkplate Touch Pad 1"
+#    pin:
+#      pca6416a: pca6416a_hub
+#      number: 10
+#  - platform: gpio
+#    name: "Inkplate Touch Pad 2"
+#    pin:
+#      pca6416a: pca6416a_hub
+#      number: 11
+#  - platform: gpio
+#    name: "Inkplate Touch Pad 3"
+#    pin:
+#      pca6416a: pca6416a_hub
+#      number: 12
+
+  - platform: homeassistant
+    id: hottub_pump
+    entity_id: fan.stargazer_s_spa_pump_1
+
+  - platform: homeassistant
+    id: hottub_light
+    entity_id: light.stargazer_s_spa_light_1
+
+  - platform: homeassistant
+    id: hottub_cleaning
+    entity_id: binary_sensor.stargazer_s_spa_cleaning_mode
+
+  - platform: homeassistant
+    entity_id: input_boolean.sleep_mode
+    id: sleep_mode
+
+  - platform: homeassistant
+    entity_id: input_boolean.e_ink_sleep_mode
+    id: eink_sleep_mode
+
+  - platform: homeassistant
+    entity_id: input_boolean.e_ink_sleepy_mode
+    id: eink_sleepy_mode
+
+  - platform: homeassistant
+    entity_id: binary_sensor.mountain_house_occupancy
+    id: secondfloor_occupied
+####
+# Content
+##
+
+
+font:
+#  - file: "fonts/Helvetica.ttf"
+#    id: my_font
+#    size: 80
+#  - file: "fonts/Helvetica.ttf"
+#    id: helvetica_96
+#    size: 96
+#  - file: "fonts/Helvetica.ttf"
+#    id: helvetica_48
+#    size: 48
+  - file: "gfonts://Inter@900"
+    id: big
+    size: 120
+  - file: "gfonts://Inter@900"
+    id: medium
+    size: 60
+  - file: "gfonts://Inter@700"
+    id: small
+    size: 30
+  - file: "gfonts://Inter@700"
+    id: tiny
+    size: 20
+
+  # Include Material Design Icons font
+  # Thanks to https://community.home-assistant.io/t/display-materialdesign-icons-on-esphome-attached-to-screen/199790/16
+  - file: 'fonts/materialdesignicons-webfont.ttf'
+    id: font_mdi_large
+    size: 200
+    glyphs: &mdi-weather-glyphs
+      - "\U000F0590" # mdi-weather-cloudy
+      - "\U000F0F2F" # mdi-weather-cloudy-alert
+      - "\U000F0E6E" # mdi-weather-cloudy-arrow-right
+      - "\U000F0591" # mdi-weather-fog
+      - "\U000F0592" # mdi-weather-hail
+      - "\U000F0F30" # mdi-weather-hazy
+      - "\U000F0898" # mdi-weather-hurricane
+      - "\U000F0593" # mdi-weather-lightning
+      - "\U000F067E" # mdi-weather-lightning-rainy
+      - "\U000F0594" # mdi-weather-clear-night
+      - "\U000F0F31" # mdi-weather-night-partly-cloudy
+      - "\U000F0595" # mdi-weather-partly-cloudy
+      - "\U000F0F32" # mdi-weather-partly-lightning
+      - "\U000F0F33" # mdi-weather-partly-rainy
+      - "\U000F0F34" # mdi-weather-partly-snowy
+      - "\U000F0F35" # mdi-weather-partly-snowy-rainy
+      - "\U000F0596" # mdi-weather-pouring
+      - "\U000F0597" # mdi-weather-rainy
+      - "\U000F0598" # mdi-weather-snowy
+      - "\U000F0F36" # mdi-weather-snowy-heavy
+      - "\U000F067F" # mdi-weather-snowy-rainy
+      - "\U000F0599" # mdi-weather-sunny
+      - "\U000F0F37" # mdi-weather-sunny-alert
+      - "\U000F14E4" # mdi-weather-sunny-off
+      - "\U000F059A" # mdi-weather-sunset
+      - "\U000F059B" # mdi-weather-sunset-down
+      - "\U000F059C" # mdi-weather-sunset-up
+      - "\U000F0F38" # mdi-weather-tornado
+      - "\U000F059D" # mdi-weather-windy
+      - "\U000F059E" # mdi-weather-windy-variant
+      - "\U000F081C" # mdi-door-open
+      - "\U000F05A9" # mdi-wifi
+      - "\U000F05AA" # mdi-no-wifi
+      - "\U000F171A" # bot
+      - "\U000F0828" # hot-tub
+      - "\U000F0335" # lightbulb
+      - "\U000F1849" # waterfall
+      - "\U000F1A45" # heating
+      - "\U000F0717" # cooling
+      - "\U000F0D43" # cooling
+      
+  - file: 'fonts/materialdesignicons-webfont.ttf'
+    id: font_mdi_medium
+    size: 40
+    glyphs: *mdi-weather-glyphs
+  - file: 'fonts/materialdesignicons-webfont.ttf'
+    id: font_mdi_small
+    size: 20
+    glyphs: *mdi-weather-glyphs
+  - file: 'fonts/materialdesignicons-webfont.ttf'
+    id: font_mdi_huge
+    size: 225
+    glyphs: *mdi-weather-glyphs
+
+image:
+  - file: "images/ss-white-cropped.png"
+    id: ss_logo_white
+    type: GRAYSCALE
+#    transparency: alpha_channel
+#    resize: 400x400
+  - file: "images/ss-black-cropped.png"
+    id: ss_logo_black
+    type: BINARY
+#    resize: 1200x883
+  - file: "images/ss-black-on-white-large.png"
+    id: ss_logo_big_black
+    resize: 500x381
+    type: binary
+#    use_transparency: True
+#  - file: mdi:alert-outline
+#    id: alert
+#    resize: 80x80
+
+
+####
+# Display
+##
+
+#lvgl:
+#  widgets:
+#    - label:
+#        align: CENTER
+#        text: 'Hello World!'
+
+display:
+  - platform: inkplate
+    id: inkplate_display
+    model: inkplate_10
+    #greyscale: True
+    partial_updating: True
+    auto_clear_enabled: False
+    update_interval: never
+    #update_interval: 1min
+    full_update_every: 0
+    #full_update_every: 480
+
+    ckv_pin: 32
+    sph_pin: 33
+    gmod_pin:
+      pca6416a: pca6416a_hub
+      number: 1
+    gpio0_enable_pin:
+      pca6416a: pca6416a_hub
+      number: 8
+    oe_pin:
+      pca6416a: pca6416a_hub
+      number: 0
+    spv_pin:
+      pca6416a: pca6416a_hub
+      number: 2
+    powerup_pin:
+      pca6416a: pca6416a_hub
+      number: 4
+    wakeup_pin:
+      pca6416a: pca6416a_hub
+      number: 3
+    vcom_pin:
+      pca6416a: pca6416a_hub
+      number: 5
+    pages:
+      - id: whitepage
+        lambda: |-
+          it.fill(COLOR_ON);
+      - id: ss_logo
+        lambda: |-
+          it.fill(COLOR_ON);
+          it.image(it.get_width()/2, it.get_height()/2, id(ss_logo_big_black), ImageAlign::CENTER);
+          it.printf(it.get_width()/2, 100, id(medium), COLOR_OFF, TextAlign::CENTER, "Welcome to");
+          //it.strftime(it.get_width()/2, 800, id(helvetica_48), COLOR_OFF, TextAlign::CENTER, "%A, %B %d %Y", id(esptime).now());
+      - id: weather_page1
+        lambda: |-
+          it.fill(COLOR_ON);
+          //it.line(400, 0, 400, 600, COLOR_OFF);
+
+          // Map weather states to MDI characters.
+          std::map<std::string, std::string> weather_icon_map
+          {
+            {"cloudy", "\U000F0590"},
+            {"cloudy-alert", "\U000F0F2F"},
+            {"exceptional", "\U000F0F2F"},
+            {"cloudy-arrow-right", "\U000F0E6E"},
+            {"fog", "\U000F0591"},
+            {"hail", "\U000F0592"},
+            {"hazy", "\U000F0F30"},
+            {"hurricane", "\U000F0898"},
+            {"lightning", "\U000F0593"},
+            {"lightning-rainy", "\U000F067E"},
+            {"clear-night", "\U000F0594"},
+            {"night-partly-cloudy", "U000F0F31"},
+            {"partlycloudy", "\U000F0595"},
+            {"partly-lightning", "\U000F0F32"},
+            {"partly-rainy", "\U000F0F33"},
+            {"partly-snowy", "\U000F0F34"},
+            {"partly-snowy-rainy", "\U000F0F35"},
+            {"pouring", "\U000F0596"},
+            {"rainy", "\U000F0597"},
+            {"snowy", "\U000F0598"},
+            {"snowy-heavy", "\U000F0F36"},
+            {"snowy-rainy", "\U000F067F"},
+            {"sunny", "\U000F0599"},
+            {"sunny-alert", "\U000F0F37"},
+            {"sunny-off", "\U000F14E4"},
+            {"sunset", "\U000F059A"},
+            {"sunset-down", "\U000F059B"},
+            {"sunset-up", "\U000F059C"},
+            {"tornado", "\U000F0F38"},
+            {"windy", "\U000F059D"},
+            {"windy-variant", "\U000F059E"},
+            {"connected", "\U000F05A9"},
+            {"disconnected", "\U000F05AA"},
+            {"bot", "\U000F171A"},
+            {"hot-tub", "\U000F0828"},
+            {"lightbulb", "\U000F0335"},
+            {"waterfall", "\U000F1849"},
+            {"heating", "\U000F1A45"},
+            {"cooling", "\U000F0717"},
+            {"cleaning", "\U000F0D43"},           
+          };
+
+          
+
+          //Current Weather
+          // Icon
+          it.printf(145, 0+20, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(cur_conditions).state.c_str()].c_str());
+
+          // Text readout
+          it.printf(145, 160+60, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(cur_conditions).state.c_str());
+ 
+          // current temp
+          it.printf(260, 20, id(big), COLOR_OFF, TextAlign::TOP_LEFT, "%.0f°F", id(cur_temp).state);
+          it.printf(260, 150, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Feels Like %.0f°F", id(cur_realfeel_temp).state);
+
+          // Wind speed and direction
+          // was 550 then 150,180
+          it.printf(600, 50, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Winds %.0f Mph %s", id(current_wind_speed).state, id(current_wind_direction).state.c_str());
+          //it.printf(600, 80, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Direction %.0f", id(current_wind_direction).state);
+          it.printf(600, 80, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Cloud Ceiling %.0f feet", id(cloud_ceiling).state);
+          it.printf(600, 110, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Preciptation %.2f in/hour", id(precip_forecast).state);
+          it.printf(600, 140, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "%.0f%% Humidity", id(cur_humidity).state);
+
+          std::string s = id(cur_forecast).state;
+
+          if (s != "unknown" && s != "unavailable") {
+            int limit = 85;
+
+            // Chat GPT Forecast
+            it.printf(280, 200, id(font_mdi_medium), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map["bot"].c_str()); // happy bot icon
+
+            int space = 0;
+            int i = 0;
+            int line = 0;
+            int y = 220; // start Y
+
+            while(i<s.length()) //loop through string, counting all the spaces, and replacing the last one with ~ [marked by space variable] if the count exceeds limit of 35
+            {
+              if(s.substr(i,1) == " "){ space = i; }
+              if(line>limit-1){ s=s.substr(0,space)+"~"+s.substr(space+1);line = 0; }
+              i++;line++;
+            }
+            size_t pos = s.find("~"); //find the first line break
+
+            int linecount = 1; //need number of lines to store the break positions in an array
+            int breakpositions[10]; //store breakpositions [the '~']
+            breakpositions[0] = -1; // start at -1 cause we need to truncate the replaced characters and without this will cut off 1st character of message
+            while ( pos != std::string::npos) //loop through  replacing the ~ with CR - though this doesnt matter here it will never be displayed, but need to change them to keep the loop from repeating at the start
+            {
+              s.replace(pos,1, "\n");
+              breakpositions[linecount] = pos; //store the position of the break in an array
+              pos = s.find("~"); // move forward
+              linecount++; // we have a new line, count it
+            }
+
+            breakpositions[linecount] = s.length(); //set the last entry in array to the length of string for calculation below
+            std::string singleline; //this will be the line we print
+
+            i = 0; 
+            while (i < linecount ) {  // count through the lines
+              singleline = s.substr(breakpositions[i]+1,(breakpositions[i+1]-breakpositions[i]-1)); //extract each line of text from the string - strip off the CRLF and the space.
+              it.printf(300, y, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "%s", singleline.c_str()); //print it!
+              y=y+30; // increment y to print properly on display
+              i++;
+            }
+          }
+
+          // hourly
+          it.printf(120+(240*0), 320, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(h1_hour).state.c_str());
+          it.printf(120+(240*0), 340, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(h1_conditions).state.c_str()].c_str());
+          it.printf(120+(240*0), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°F", id(h1_temp).state);
+
+          it.printf(120+(240*1), 320, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(h2_hour).state.c_str());
+          it.printf(120+(240*1), 340, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(h2_conditions).state.c_str()].c_str());
+          it.printf(120+(240*1), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°F", id(h2_temp).state);
+
+          it.printf(120+(240*2), 320, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(h3_hour).state.c_str());
+          it.printf(120+(240*2), 340, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(h3_conditions).state.c_str()].c_str());
+          it.printf(120+(240*2), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°F", id(h3_temp).state);
+
+          it.printf(120+(240*3), 320, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(h4_hour).state.c_str());
+          it.printf(120+(240*3), 340, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(h4_conditions).state.c_str()].c_str());
+          it.printf(120+(240*3), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°F", id(h4_temp).state);
+
+          it.printf(120+(240*4), 320, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(h5_hour).state.c_str());
+          it.printf(120+(240*4), 340, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(h5_conditions).state.c_str()].c_str());
+          it.printf(120+(240*4), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°F", id(h5_temp).state);
+
+
+          // hot tub telemetry
+          it.printf(450, 655, id(font_mdi_huge), COLOR_OFF, TextAlign::CENTER, "%s", weather_icon_map["hot-tub"].c_str()); // hot tub
+          it.printf(600, 555, id(medium), COLOR_OFF, TextAlign::TOP_LEFT, "Stargazer's Spa");
+          it.printf(600, 625, id(medium), COLOR_OFF, TextAlign::TOP_LEFT, "%.0f°F", id(hottub_temp).state);
+          it.printf(650, 680, id(small), COLOR_OFF, TextAlign::TOP_LEFT, "%.0f°F", id(hottub_setpoint).state);
+
+          if (id(hottub_light).state)
+            it.printf(600, 720, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", weather_icon_map["lightbulb"].c_str()); // hot tub light
+
+          // detect ocpuancy
+          if ( !(id(hottub_light).state || (id(hottub_pump).state && !id(hottub_cleaning).state)) )
+            it.filled_rectangle(360, 574, 85, 80, COLOR_ON);
+
+          if (id(hottub_pump).state)
+            it.printf(640, 720, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", weather_icon_map["waterfall"].c_str()); // hot tub waterfall
+
+          if (id(hottub_action).state == "heating")
+            it.printf(680, 720, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", weather_icon_map["heating"].c_str()); // hot tub heating
+          else if (id(hottub_action).state == "cooling")
+            it.printf(680, 720, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", weather_icon_map["cooling"].c_str()); // hot tub cooling
+
+          if (id(hottub_cleaning).state)
+            it.printf(720, 720, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", weather_icon_map["cleaning"].c_str()); // hot tub light
+
+          //TODO
+
+          // Forecast Boxes
+          // it.rectangle(550,200,80,80, COLOR_OFF);
+          // it.rectangle(550,200,160,80, COLOR_OFF);
+          // it.rectangle(550,200,240,80, COLOR_OFF);
+          // it.rectangle(550,340,80,80, COLOR_OFF);
+          // it.rectangle(550,340,160,80, COLOR_OFF);
+          // it.rectangle(550,340,240,80, COLOR_OFF);
+
+          //Date and Time
+          it.strftime(550, 790, id(tiny), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "last updated: %A %B %d, %Y %I:%M%p", id(esptime).now());
+          //it.strftime(400, 30+500, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%I:%M:%S%p", id(esptime).now());
+          //it.strftime(400, 30+500, id(big), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%I:%M%p", id(esptime).now());
+
+          //Hourly Forecast
+          // it.printf(670,170, id(tiny), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "Hourly");
+          //it.printf(590,210,id(font_mdi_medium),COLOR_OFF, TextAlign::CENTER_HORIZONTAL,"%s",weather_icon_map[id(weather_h1).state.c_str()].c_str());
+          //it.printf(670,210,id(font_mdi_medium),COLOR_OFF, TextAlign::CENTER_HORIZONTAL,"%s",weather_icon_map[id(weather_h2).state.c_str()].c_str());
+          //it.printf(750,210,id(font_mdi_medium),COLOR_OFF, TextAlign::CENTER_HORIZONTAL,"%s",weather_icon_map[id(weather_h1).state.c_str()].c_str());
+          //it.printf(590,250,id(tiny),COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°", id(temp_h1).state);
+          //it.printf(670,250,id(tiny),COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°", id(temp_h2).state);
+          //it.printf(750,250,id(tiny),COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°", id(temp_h3).state);
+          //Daily Forecast
+          // it.printf(670,310, id(tiny), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "Daily");
+          //it.printf(590,350,id(font_mdi_medium), COLOR_OFF,TextAlign::CENTER_HORIZONTAL,"%s",weather_icon_map[id(weather_d1).state.c_str()].c_str());
+          //it.printf(670,350,id(font_mdi_medium), COLOR_OFF,TextAlign::CENTER_HORIZONTAL,"%s",weather_icon_map[id(weather_d2).state.c_str()].c_str());
+          //it.printf(750,350,id(font_mdi_medium), COLOR_OFF,TextAlign::CENTER_HORIZONTAL,"%s",weather_icon_map[id(weather_d1).state.c_str()].c_str());
+          //it.printf(590,390,id(tiny), COLOR_OFF,TextAlign::CENTER_HORIZONTAL, "%.0f°", id(temp_d1).state);
+          //it.printf(670,390,id(tiny), COLOR_OFF,TextAlign::CENTER_HORIZONTAL, "%.0f°", id(temp_d2).state);
+          //it.printf(750,390,id(tiny), COLOR_OFF,TextAlign::CENTER_HORIZONTAL, "%.0f°", id(temp_d3).state);
+          //Outdoor Data
+          //it.printf(20, 270, id(tiny),  COLOR_OFF,"Yard Temp: %.1f°", id(out_temp).state);
+          //it.printf(20, 300, id(tiny),  COLOR_OFF,"Humidity: %.1f%%", id(out_humidity).state);
+          //it.printf(20, 330, id(tiny),  COLOR_OFF,"Pressure: %.2f in", id(out_pressure).state);
+          //it.printf(20, 360, id(tiny),  COLOR_OFF,"Soil Moisture: %.0f%%", id(out_moisture).state);
+          //it.printf(20, 390, id(tiny),  COLOR_OFF,"Pot Moisture: %.0f%%", id(pot_moisture).state);
+          //Door Status
+          //it.printf(20, 170, id(tiny),"Front:");
+          //it.printf(100, 170, id(font_mdi_medium),"%s",door_map[id(front_door).state.c_str()].c_str());
+          //it.printf(20, 210, id(tiny),"Rear:");
+          //it.printf(100, 210, id(font_mdi_medium),"%s",door_map[id(back_door).state.c_str()].c_str());
+          //Temp Graph
+          //it.graph(250, 430, id(temp_graph));   
+  
+          // SS logo
+          //it.image(it.get_width()-40, 20, id(ss_logo_white), ImageAlign::TOP_RIGHT);
+          it.image(it.get_width()-40, 20, id(ss_logo_black), ImageAlign::TOP_RIGHT);
+
+          // connected status icon
+          if (id(system_status).state) {
+            it.printf(it.get_width()-40, 800, id(font_mdi_small), COLOR_OFF, TextAlign::BOTTOM_LEFT, "%s", weather_icon_map["connected"].c_str());
+          } else {
+            it.printf(it.get_width()-40, 800, id(font_mdi_small), COLOR_OFF, TextAlign::BOTTOM_LEFT, "%s", weather_icon_map["disconnected"].c_str());
+          }
+
+display_capture:
+  display_id: inkplate_display
+  backend: inkplate
+
+interval:
+  - interval: 60s
+    then:
+      - script.execute: mainLoop
+
+remote_transmitter:
+  carrier_duty_percent: 50%
+  pin: GPIO12
+#  pin:
+#    pca6416a: pca6416a_hub2
+#    number: 1
+
+## Main Loop
+script:
+#  - id: fullRefreshCheck
+#    then:
+#      - if:
+#        condition:
+#        refresh_count
+  - id: mainLoop
+    then:
+      - logger.log: "e-ink display - interval start"
+      - component.update: battery_voltage
+      - if:
+          condition:
+            - binary_sensor.is_on: eink_sleep_mode
+          then:
+            - logger.log: "e-ink display -  eink_sleep_mode on"
+          else:
+            - logger.log: "e-ink display -  eink_sleep_mode off"
+      - if:
+          condition:
+            - api.connected:
+          then:
+            - logger.log: "e-ink display -  api connected"
+          else:
+            - logger.log: "e-ink display -  api disconnected"
+      - if:
+          condition:
+            - binary_sensor.is_on: secondfloor_occupied
+          then:
+            - logger.log: "e-ink display -  occuancy detected"
+          else:
+            - logger.log: "e-ink display -  occuancy not detected"
+
+      # check if we should be in sleep mode (logo display and then check if we should be sleepy and sleep)
+      - if:
+          condition:
+            - binary_sensor.is_on: eink_sleep_mode
+          then:
+            - logger.log: "e-ink display - showing logo"
+# KAG mod            - lambda: id(inkplate_display).set_skip_reset(true);
+#            - lambda: id(inkplate_display).set_partial_updating(false);
+            - display.page.show: ss_logo
+            - component.update: inkplate_display
+#            - component.update: inkplate_display
+#            - component.update: inkplate_display
+#            - component.update: inkplate_display
+#            - component.update: inkplate_display
+#            - component.update: inkplate_display
+#            - component.update: inkplate_display
+
+      # if we are not in sleep mode, check for API connetion and occupancy, then update if all true
+      - if:
+          condition:
+            - not:
+              - binary_sensor.is_on: eink_sleep_mode
+            - api.connected:
+#            - binary_sensor.is_on: secondfloor_occupied
+          then:
+            - logger.log: "e-ink display - showing weather page"
+            - component.update: current_wind_direction
+#            - if:
+# KAG MOD            - lambda: id(inkplate_display).set_skip_reset(true);
+            - display.page.show: weather_page1
+            - component.update: inkplate_display
+#            - component.update: inkplate_display
+#            - component.update: inkplate_display
+#            - component.update: inkplate_display
+#            - component.update: inkplate_display
+#            - component.update: inkplate_display
+#            - component.update: inkplate_display
+
+# decide which sleep mode to go into
+# sleepy and occupied, short sleep
+      - if:
+          condition:
+            - binary_sensor.is_on: eink_sleepy_mode
+            - binary_sensor.is_on: secondfloor_occupied
+            - not:
+              - binary_sensor.is_on: eink_sleep_mode
+          then:
+            - logger.log: "e-ink display - deep sleeing for short time"
+            - deep_sleep.enter:
+                id: deep_sleep_1
+                sleep_duration: 300s
+# sleepy and unoccupied, but not hibernated, medium sleep
+      - if:
+          condition:
+            - binary_sensor.is_on: eink_sleepy_mode
+            - not:
+              - binary_sensor.is_on: eink_sleep_mode
+              - binary_sensor.is_on: secondfloor_occupied
+          then:
+            - logger.log: "e-ink display - deep sleeing for medium time"
+            - deep_sleep.enter:
+                id: deep_sleep_1
+                sleep_duration: 900s
+      - if:
+          condition:
+            - binary_sensor.is_on: eink_sleep_mode
+            - binary_sensor.is_on: eink_sleepy_mode
+          then:
+            - logger.log: "e-ink display - deep sleeing for long time"
+            - deep_sleep.enter:
+                id: deep_sleep_1
+                #sleep_duration: 300s
+                until: "16:00:00"
+                time_id: esptime
+
+
+
+  - id: marcycandle_on
+    then:
+      - remote_transmitter.transmit_pronto: 
+          data: "0000 006D 0022 0000 0161 00AC 0018 0014 0017 0014 0017 0014 0017 0015 0017 0014 0016 0015 0016 0015 0017 0014 0017 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 0015 0017 0015 0017 0015 0017 0015 0017 0015 0017 0015 0016 0016 0017 0015 0018 003E 0017 003F 0018 003E 0018 003E 0016 0040 0017 003F 0017 003F 0018 003E 0017 0181"
+          repeat:
+            times: 5
+  - id: marcycandle_off
+    then:
+      - remote_transmitter.transmit_pronto: 
+          data: "0000 006D 0022 0000 0160 00AD 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0040 0016 0040 0016 0040 0016 0040 0016 0040 0016 0040 0016 0040 0015 0041 0016 0040 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0015 0017 0016 0016 0015 0041 0015 0041 0015 0041 0015 0041 0015 0041 0015 0041 0015 0041 0015 0181"
+          repeat:
+            times: 5
+  - id: fireplace_power
+    then:
+      - remote_transmitter.transmit_pronto: 
+          data: "0000 006D 0022 0000 015B 00AE 0016 0041 0015 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0041 0015 0041 0015 0041 0015 0041 0015 0041 0015 0041 0015 0041 0015 0015 0016 0015 0016 0041 0015 0015 0016 0041 0015 0015 0016 0015 0016 0015 0016 0040 0017 003F 0017 0014 0018 003F 0018 0013 0018 003F 0019 003D 001A 003D 001C 0181"
+          repeat:
+            times: 5
+  - id: fireplace_temp
+    then:
+      - remote_transmitter.transmit_pronto: 
+          data: "0000 006D 0022 0000 015B 00AE 0016 0041 0015 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0041 0015 0041 0015 0041 0015 0041 0015 0040 0016 0040 0016 0040 0016 0015 0016 0040 0016 0015 0017 0014 0016 0040 0015 0016 0018 0014 0018 0014 0018 003F 0018 0013 0019 003D 001B 003B 001B 0010 001B 003B 001C 003B 001B 003B 001B 0181"
+          repeat:
+            times: 5
+  - id: fireplace_fire
+    then:
+      - remote_transmitter.transmit_pronto: 
+          data: "0000 006D 0022 0000 015B 00AE 0016 0041 0015 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0041 0015 0041 0015 0041 0015 0040 0016 0040 0016 0040 0016 0040 0015 0041 0018 0014 0016 0040 0016 0040 0016 0040 0016 0015 0018 0013 0018 0013 0019 0012 001B 003B 001C 000F 001A 0011 001B 0010 001C 003B 001B 003B 001B 003B 001B 0181"
+          repeat:
+            times: 5
+  - id: fireplace_timer
+    then:
+      - remote_transmitter.transmit_pronto: 
+          data: "0000 006D 0022 0000 015B 00AD 0016 0041 0015 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0041 0015 0041 0015 0041 0015 0041 0015 0041 0017 0040 0017 0040 0018 003D 0019 0012 001B 0010 001B 003B 001B 003B 001B 0010 001B 0010 001B 0010 001B 0010 001A 003D 001A 003D 0019 0012 0019 0012 0019 003D 0019 003D 0018 003F 0017 0181"
+          repeat:
+            times: 5
+  - id: fireplace_up
+    then:
+      - remote_transmitter.transmit_pronto: 
+          data: "0000 006D 0022 0000 015B 00AD 0018 0040 0015 0015 0016 0015 0018 0014 0019 0012 0017 0015 0019 0012 0018 0014 0018 0013 0018 003F 0017 0040 0017 003F 001A 003C 001B 003B 001A 003C 001B 003B 001B 0010 001B 003B 001A 0011 001A 003D 0019 003D 0019 0012 0019 0012 0019 0012 0019 003E 0017 0014 0017 003F 0017 0014 0017 0014 0017 003F 0017 003F 0017 003F 0017 0181"
+          repeat:
+            times: 5
+  - id: fireplace_down
+    then:
+      - remote_transmitter.transmit_pronto: 
+          data: "0000 006D 0022 0000 015B 00AD 0016 0041 0015 0015 0016 0015 0017 0015 0018 0014 0016 0015 0018 0014 0018 0014 0018 0013 0018 003F 0019 003E 0019 003D 001B 003C 001B 003B 001B 003B 001D 003A 001B 003B 001B 0010 001B 003B 001A 0011 001B 0010 001A 0011 001B 0010 001B 0010 001B 0010 001B 003B 001A 0011 001B 003B 001A 003C 001A 003D 001A 003D 001A 003D 0019 0181"
+          repeat:
+            times: 5
+  - id: tealights_on
+    then:
+      - remote_transmitter.transmit_pronto: 
+          data: "0000 006D 0022 0000 0163 00AC 0018 0015 0017 0016 0017 0016 0018 0015 0018 0015 0018 0015 001A 0014 001A 0014 001A 003D 001C 003B 001B 003B 001C 003B 001B 003B 001B 003B 001B 003B 001A 003D 001A 003D 001A 0013 001A 0013 001A 0013 001A 0014 001A 0014 0019 0014 0019 0014 0019 0014 0019 003E 0018 003F 0018 003F 0019 003E 0018 003F 0018 003F 0018 003F 0018 0181"
+          repeat:
+            times: 5
+  - id: tealights_off
+    then:
+      - remote_transmitter.transmit_pronto: 
+          data: "0000 006D 0022 0000 0163 00AD 0018 0015 0018 0015 001A 0013 001A 0013 0019 0015 001C 0011 001C 0011 001C 0012 001C 003B 001C 003B 001C 003B 001C 003B 001C 003B 001C 003B 001C 003B 001C 003B 001C 003B 001C 0012 001B 0012 001B 003B 001B 0012 001C 0012 001B 0012 001A 0013 001A 0013 001B 003B 001B 003C 001A 0013 001A 003D 001A 003D 001A 003D 001A 003D 001A 0181"
+          repeat:
+            times: 5
+

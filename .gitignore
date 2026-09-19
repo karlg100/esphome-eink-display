@@ -1,0 +1,26 @@
+# Credentials and local connection settings
+secrets.yaml
+secrets.yml
+.env
+.env.*
+!.env.example
+.home-assistant/
+.local/
+*.key
+*.pem
+
+# Generated ESPHome / Python files
+.esphome/
+.pio/
+.venv/
+__pycache__/
+*.pyc
+*.bin
+*.elf
+*.map
+*.log
+
+# Editor / OS files
+.DS_Store
+.vscode/
+.idea/
