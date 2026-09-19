@@ -38,9 +38,10 @@ With ESPHome installed, validate from the repository root:
 esphome config displays/e-paper-infoscreen/e-paper-infoscreen.yaml
 ```
 
-This initial import is a baseline, not a claim that the configuration builds
-against the latest ESPHome. External components and Google Fonts require network
-access. See the display README for dependencies and known issues.
+The infoscreen configuration with screenshot capture disabled was successfully
+compiled on ESPHome 2026.9.0 on 2026-09-19. Google Fonts require network access;
+commented-out external components are inactive. See the display README for build
+results, dependencies, and known issues.
 
 ## Adding a display
 

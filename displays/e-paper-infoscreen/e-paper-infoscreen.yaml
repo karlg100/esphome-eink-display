@@ -18,12 +18,12 @@ esp32:
       minimum_chip_revision: "3.0"
 
 external_components:
-  - source:
-      type: git
-      url: https://github.com/karlg100/esphome-display-screenshot
-      ref: inkplate-support
-    components: [display_capture]
-    refresh: always
+#  - source:
+#      type: git
+#      url: https://github.com/karlg100/esphome-display-screenshot
+#      ref: inkplate-support
+#    components: [display_capture]
+#    refresh: always
 
   # equivalent shorthand for GitHub
 #  - source: github://karlg100/esphome@dev
@@ -1008,9 +1008,9 @@ display:
             it.printf(it.get_width()-40, 800, id(font_mdi_small), COLOR_OFF, TextAlign::BOTTOM_LEFT, "%s", weather_icon_map["disconnected"].c_str());
           }
 
-display_capture:
-  display_id: inkplate_display
-  backend: inkplate
+#display_capture:
+#  display_id: inkplate_display
+#  backend: inkplate
 
 interval:
   - interval: 60s
