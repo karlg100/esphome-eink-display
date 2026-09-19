@@ -8,7 +8,7 @@ user-provided source. Runtime logic is unchanged in this baseline.
 ## Included dependencies
 
 - `fonts/materialdesignicons-webfont.ttf`: existing live Material Design Icons font.
-- Three images in `images/` are still pending import because SSH became unreachable; see [the image checklist](images/README.md).
+- Three images in `images/`, copied from the exact files referenced by the live YAML.
 - Inter fonts are fetched through ESPHome's `gfonts://` references.
 - The external `display_capture` component uses
   `https://github.com/karlg100/esphome-display-screenshot`, branch `inkplate-support`.
@@ -39,6 +39,5 @@ also need review. No fixes have been applied in the baseline commit.
 ## Deployment
 
 Only the live `e-paper-infoscreen.yaml` is within the current remote write scope.
-The font was copied locally; image transfers are pending. Their live counterparts
-must not be changed. See the repository README for handling secret references and keeping
+Fonts and images were copied locally. Their live counterparts must not be changed. See the repository README for handling secret references and keeping
 other ESPHome projects untouched.

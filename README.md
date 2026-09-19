@@ -38,9 +38,6 @@ With ESPHome installed, validate from the repository root:
 esphome config displays/e-paper-infoscreen/e-paper-infoscreen.yaml
 ```
 
-The three referenced images still need to be copied from the server after SSH
-access returns; see [the image checklist](displays/e-paper-infoscreen/images/README.md).
-
 This initial import is a baseline, not a claim that the configuration builds
 against the latest ESPHome. External components and Google Fonts require network
 access. See the display README for dependencies and known issues.

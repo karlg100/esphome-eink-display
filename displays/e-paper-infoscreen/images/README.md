@@ -1,13 +1,11 @@
-# Display images pending import
+# Display images
 
-The live YAML references these existing files under `/root/config/esphome/images/`:
+These files were copied without modification from `/root/config/esphome/images/`
+on 2026-09-19. Only the three image files referenced by this display were imported.
 
 - `ss-white-cropped.png`
 - `ss-black-cropped.png`
 - `ss-black-on-white-large.png`
 
-The SSH connection became unreachable after the font was copied during the initial
-import. These three image files have not been copied into this repository yet.
-Copy only these files from the server into this directory when access returns;
-do not modify or synchronize the remote image directory. A local ESPHome build
-requires these files in addition to local secrets and the external dependencies.
+Keep paths relative to the adjacent display YAML. The remote images may also be
+used by other projects and are outside the current remote write scope.
