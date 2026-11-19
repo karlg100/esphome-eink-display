@@ -1425,10 +1425,16 @@ display:
               }
               if (!more.empty())
                 it.print(260, 660, id(label), COLOR_OFF, TextAlign::TOP_LEFT, ("Then: " + more).c_str());
-              const Day &last = upcoming.back();
-              it.printf(260, 698, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Season's last day: %s %s %d, %s – %s",
-                        DOW3[last.t.day_of_week - 1], MON3[last.t.month - 1], last.t.day_of_month,
-                        hr(last.open).c_str(), hr(last.close).c_str());
+              // last regular day, and the New Year's Eve party (the 4 PM opening)
+              std::string tail;
+              const Day *last = nullptr, *nye = nullptr;
+              for (const Day &d : upcoming) { if (d.open >= 16) nye = &d; else last = &d; }
+              if (last != nullptr)
+                tail = str_sprintf("Last Christmastime day: %s %s %d", DOW3[last->t.day_of_week - 1], MON3[last->t.month - 1], last->t.day_of_month);
+              if (nye != nullptr)
+                tail += str_sprintf("%sNew Year's Eve party %s %d, %s – %s", tail.empty() ? "" : " · ",
+                                    MON3[nye->t.month - 1], nye->t.day_of_month, hr(nye->open).c_str(), hr(nye->close).c_str());
+              it.print(260, 698, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, tail.c_str());
             }
             // QR codes: tickets (sold online by date) and the park calendar
             id(qr_dyn).set_value("https://secure.interactiveticketing.com/1.43/faaba3/");
