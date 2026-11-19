@@ -89,6 +89,17 @@ time:
     # is much more accurate than the internal clock
     update_interval: never
   - platform: homeassistant
+    id: ha_time
+    # one full (black/white) refresh a night to clear partial-update ghosting,
+    # while nobody is looking; all other redraws are flicker-free partial updates
+    on_time:
+      - seconds: 0
+        minutes: 0
+        hours: 3
+        then:
+          - logger.log: "e-ink display - nightly full refresh"
+          - lambda: id(inkplate_display).block_partial();
+          - component.update: inkplate_display
     # instead try to synchronize via network repeatedly ...
     on_time_sync:
       then:
@@ -106,6 +117,16 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'false'
+
+# last time the HA API was connected (for the "offline since" note)
+  - id: last_api_ok_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: last_api_ok_str
+    type: std::string
+    restore_value: no
+    initial_value: '""'
 
 deep_sleep:
 #  run_duration: alwasy
@@ -159,7 +180,9 @@ switch:
       - lambda: id(inkplate_display).set_partial_updating(true);
     turn_off_action:
       - lambda: id(inkplate_display).set_partial_updating(false);
-#    restore_mode: RESTORE_DEFAULT_OFF
+    # a template switch defaults to ALWAYS_OFF, which ran turn_off_action on every
+    # boot and silently disabled partial updates (every redraw flashed black/white)
+    restore_mode: ALWAYS_ON
 
 button:
   - platform: template
@@ -1008,8 +1031,19 @@ display:
           // it.rectangle(550,340,160,80, COLOR_OFF);
           // it.rectangle(550,340,240,80, COLOR_OFF);
 
-          //Date and Time
-          it.strftime(550, 790, id(tiny), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "last updated: %A %B %d, %Y %I:%M%p", id(esptime).now());
+          //Date, or an offline note if HA has been unreachable for 30+ minutes.
+          // (no clock: a minute-by-minute timestamp forced a redraw every minute)
+          bool api_ok = api::global_api_server != nullptr && api::global_api_server->is_connected();
+          if (!api_ok && millis() - id(last_api_ok_ms) > 30UL * 60UL * 1000UL) {
+            if (id(last_api_ok_str).empty())
+              it.printf(550, 790, id(tiny), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "offline");
+            else
+              it.printf(550, 790, id(tiny), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "offline since %s", id(last_api_ok_str).c_str());
+          } else {
+            auto now = id(esptime).now();
+            if (now.is_valid())
+              it.printf(550, 790, id(tiny), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s %d", now.strftime("%A, %B").c_str(), now.day_of_month);
+          }
           //it.strftime(400, 30+500, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%I:%M:%S%p", id(esptime).now());
           //it.strftime(400, 30+500, id(big), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%I:%M%p", id(esptime).now());
 
@@ -1080,6 +1114,13 @@ script:
   - id: mainLoop
     then:
       - logger.log: "e-ink display - interval start"
+      - lambda: |-
+          if (api::global_api_server != nullptr && api::global_api_server->is_connected()) {
+            id(last_api_ok_ms) = millis();
+            auto t = id(esptime).now();
+            if (t.is_valid())
+              id(last_api_ok_str) = t.strftime("%a %I:%M %p");
+          }
       - component.update: battery_voltage
       - if:
           condition:
@@ -1130,8 +1171,12 @@ script:
           condition:
             - not:
               - binary_sensor.is_on: eink_sleep_mode
-            - api.connected:
             - binary_sensor.is_on: weather_data_ready
+            # connected, or offline long enough that the page should say so.
+            # Redrawing an unchanged page is a no-op (partial update, no pixels change).
+            - lambda: |-
+                return (api::global_api_server != nullptr && api::global_api_server->is_connected()) ||
+                       millis() - id(last_api_ok_ms) > 30UL * 60UL * 1000UL;
 #            - binary_sensor.is_on: secondfloor_occupied
           then:
             - logger.log: "e-ink display - showing weather page"

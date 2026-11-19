@@ -40,6 +40,16 @@ device credentials as part of importing this repository.
 - The `input_button.refresh_forecast` trigger runs `mainLoop`, but its first value
   after connecting is ignored so it cannot draw a half-loaded page.
 
+- Refreshes are partial (only changed pixels redraw, no black/white flash).
+  The "Inkplate Partial Updating" template switch is `restore_mode: ALWAYS_ON`;
+  the template-switch default (`ALWAYS_OFF`) used to disable partial updates on
+  every boot. One full refresh runs nightly at 3:00 to clear ghosting.
+- The footer shows the date, not a clock, so the page only changes when data
+  does. If HA is unreachable for 30+ minutes the footer reads "offline since …".
+- Deep-sleep wakeups lose the framebuffer, so the first draw after each wake is
+  a full (flashing) refresh. For a quiet wall display, run it on USB power with
+  `input_boolean.e_ink_sleepy_mode` off.
+
 ## Data sources (2026-11-19)
 
 - Current conditions: Weather Underground station `weather.knhlanca3` and its
