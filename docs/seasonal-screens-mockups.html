@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>E-ink screen mockups</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700;900&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<style>
+  :root { --page:#f4f3ef; --ink:#151515; --muted:#5d5c58; --panel:#ecebe5; --line:#d6d4cc; }
+  @media (prefers-color-scheme: dark) { :root { --page:#1c1c1b; --ink:#ecebe6; --muted:#a7a59e; --line:#3a3a37; } }
+  body { margin:0; background:var(--page); color:var(--ink); font-family:Inter, system-ui, sans-serif; }
+  main { max-width:1260px; margin:0 auto; padding:20px 16px 48px; }
+  h1 { font-size:22px; font-weight:700; margin:4px 0 6px; }
+  p.lede { color:var(--muted); margin:0 0 22px; font-size:15px; line-height:1.5; }
+  section { margin:0 0 34px; }
+  h2 { font-size:18px; font-weight:700; margin:0 0 4px; }
+  .when { color:var(--muted); font-size:14px; margin:0 0 10px; line-height:1.45; }
+  .frame { background:#2b2a27; padding:14px; border-radius:10px; }
+  svg.screen { display:block; width:100%; height:auto; background:#ecebe5; border-radius:2px; }
+  .src { font-size:13px; color:var(--muted); margin-top:8px; line-height:1.5; }
+  .src a { color:inherit; }
+</style>
+</head>
+<body>
+<main>
+  <h1>E-ink seasonal screens: mockups</h1>
+  <p class="lede">Each screen is the real 1200&times;825 Inkplate canvas, with the same fixed weather header and spa footer as the current firmware. Only the middle changes. Numbers are sample data. QR codes for real pages scan; gray-framed ones are placeholders until a link is chosen.</p>
+
+  <section>
+    <h2>Ski report: nearby areas</h2>
+    <p class="when">Shown Nov&ndash;Apr, only when at least one area is open today or opens within 3 days (snowmaking alone doesn't count).</p>
+    <div class="frame"><svg class="screen" id="s-ski" viewBox="0 0 1200 825"></svg></div>
+    <p class="src">Data: each resort's own report page, scraped by Home Assistant (<a href="https://www.brettonwoods.com/snow-trail-report/">Bretton Woods</a>, <a href="https://www.cannonmt.com/mountain-report">Cannon</a>), with <a href="https://snocountry.com/snow-report/new-hampshire/bretton-woods/">SnoCountry</a> as a fallback.</p>
+  </section>
+
+  <section>
+    <h2>Ski detail: one resort with its trail map</h2>
+    <p class="when">Rotates through open resorts. The map is a dithered 1-bit image stored on the device; open trails are listed beside it.</p>
+    <div class="frame"><svg class="screen" id="s-skidetail" viewBox="0 0 1200 825"></svg></div>
+  </section>
+
+  <section>
+    <h2>Snowmobiling</h2>
+    <p class="when">Shown Dec&ndash;Mar, when there's at least 6&Prime; of snow on the ground at the house for 3 days and local trails are reported open.</p>
+    <div class="frame"><svg class="screen" id="s-sled" viewBox="0 0 1200 825"></svg></div>
+    <p class="src">Rentals: <a href="https://wildlife.nh.gov/highway-recreational-vehicles-ohrv-and-snowmobiles/nh-ohrvsnowmobile-rental-agents">NH Fish and Game rental agents list</a>. Registration: <a href="https://www.wildlife.nh.gov/highway-recreational-vehicles-ohrv-and-snowmobiles/registering-your-ohrv-or-snowmobile">NH Fish and Game</a>.</p>
+  </section>
+
+  <section>
+    <h2>Santa's Village</h2>
+    <p class="when">Shown only when the park is open today or within the next 3 days.</p>
+    <div class="frame"><svg class="screen" id="s-santa" viewBox="0 0 1200 825"></svg></div>
+    <p class="src">Dates: <a href="https://www.santasvillage.com/park-info-tickets/dates-hours">santasvillage.com 2026 calendar</a> (Christmastime Saturdays Nov 7&ndash;Dec 19 plus Fri Nov 27, 11&ndash;7; Sundays Nov 22&ndash;Dec 20, 11&ndash;6; New Year's Eve 4&ndash;9).</p>
+  </section>
+
+  <section>
+    <h2>Hiking</h2>
+    <p class="when">Shown May&ndash;Oct when there's no snow on the ground. Trail list is curated in Home Assistant; one QR code per trail.</p>
+    <div class="frame"><svg class="screen" id="s-hike" viewBox="0 0 1200 825"></svg></div>
+  </section>
+</main>
+
+<script>
+const INK = '#151515', W = 1200;
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const T = (x, y, s, size, weight, anchor, extra) =>
+  `<text x="${x}" y="${y}" font-family="Inter, sans-serif" font-size="${size}" font-weight="${weight||700}" ${(extra||'').includes('fill=') ? '' : `fill="${INK}"`} text-anchor="${anchor||'start'}" dominant-baseline="hanging" ${extra||''}>${esc(s)}</text>`;
+const rect = (x,y,w,h,fill,extra) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill||INK}" ${extra||''}/>`;
+const box = (x,y,w,h,sw) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${INK}" stroke-width="${sw||3}" rx="6"/>`;
+
+const icons = {
+  sun: (cx,cy,r) => `<g stroke="${INK}" stroke-width="${r*0.14}" fill="none"><circle cx="${cx}" cy="${cy}" r="${r*0.42}"/>${[0,45,90,135,180,225,270,315].map(a=>{const t=a*Math.PI/180;return `<line x1="${cx+Math.cos(t)*r*0.62}" y1="${cy+Math.sin(t)*r*0.62}" x2="${cx+Math.cos(t)*r*0.9}" y2="${cy+Math.sin(t)*r*0.9}" stroke-linecap="round"/>`}).join('')}</g>`,
+  cloud: (cx,cy,r) => `<path d="M${cx-r*0.75},${cy+r*0.35} a${r*0.3},${r*0.3} 0 0 1 ${r*0.05},-${r*0.6} a${r*0.42},${r*0.42} 0 0 1 ${r*0.8},-${r*0.15} a${r*0.32},${r*0.32} 0 0 1 ${r*0.55},${r*0.4} a${r*0.2},${r*0.2} 0 0 1 -${r*0.05},${r*0.35} z" fill="none" stroke="${INK}" stroke-width="${r*0.13}" stroke-linejoin="round"/>`,
+  snow: (cx,cy,r) => `<g stroke="${INK}" stroke-width="${r*0.12}" stroke-linecap="round">${[0,60,120].map(a=>{const t=a*Math.PI/180;return `<line x1="${cx-Math.cos(t)*r*0.8}" y1="${cy-Math.sin(t)*r*0.8}" x2="${cx+Math.cos(t)*r*0.8}" y2="${cy+Math.sin(t)*r*0.8}"/>`}).join('')}</g>`,
+  mountain: (x,y,s) => `<path d="M${x},${y+s} L${x+s*0.38},${y+s*0.25} L${x+s*0.55},${y+s*0.55} L${x+s*0.7},${y+s*0.38} L${x+s},${y+s} Z" fill="none" stroke="${INK}" stroke-width="${s*0.07}" stroke-linejoin="round"/>`,
+  tub: (x,y,s,inUse) => `<g fill="none" stroke="${INK}" stroke-width="${s*0.09}" stroke-linecap="round"><path d="M${x},${y+s*0.55} h${s} v${s*0.25} a${s*0.12},${s*0.12} 0 0 1 -${s*0.12},${s*0.12} h-${s*0.76} a${s*0.12},${s*0.12} 0 0 1 -${s*0.12},-${s*0.12} z"/><path d="M${x+s*0.62},${y+s*0.4} q${s*0.06},-${s*0.12} 0,-${s*0.22} t0,-${s*0.2}"/><path d="M${x+s*0.82},${y+s*0.4} q${s*0.06},-${s*0.12} 0,-${s*0.22} t0,-${s*0.2}"/>${inUse?`<circle cx="${x+s*0.3}" cy="${y+s*0.25}" r="${s*0.1}" fill="${INK}"/>`:''}</g>`,
+  wifi: (x,y,s) => `<g fill="none" stroke="${INK}" stroke-width="${s*0.12}" stroke-linecap="round"><path d="M${x},${y+s*0.4} q${s*0.5},-${s*0.4} ${s},0"/><path d="M${x+s*0.2},${y+s*0.6} q${s*0.3},-${s*0.25} ${s*0.6},0"/><circle cx="${x+s*0.5}" cy="${y+s*0.85}" r="${s*0.06}" fill="${INK}"/></g>`,
+  sled: (x,y,s) => `<g fill="none" stroke="${INK}" stroke-width="${s*0.08}" stroke-linecap="round" stroke-linejoin="round"><path d="M${x},${y+s*0.8} h${s*0.9} q${s*0.12},0 ${s*0.1},-${s*0.12}"/><path d="M${x+s*0.1},${y+s*0.65} l${s*0.2},-${s*0.3} h${s*0.35} l${s*0.25},${s*0.3} z"/><path d="M${x+s*0.45},${y+s*0.35} l${s*0.05},-${s*0.2} h${s*0.12}"/></g>`,
+  tree: (x,y,s) => `<path d="M${x+s/2},${y} L${x+s*0.85},${y+s*0.75} H${x+s*0.15} Z M${x+s/2},${y+s*0.75} V${y+s}" fill="none" stroke="${INK}" stroke-width="${s*0.08}" stroke-linejoin="round"/>`,
+  boot: (x,y,s) => `<path d="M${x+s*0.25},${y} v${s*0.6} l-${s*0.1},${s*0.3} h${s*0.75} q0,-${s*0.2} -${s*0.25},-${s*0.25} l-${s*0.1},-${s*0.65} z" fill="none" stroke="${INK}" stroke-width="${s*0.08}" stroke-linejoin="round"/>`
+};
+
+function qr(x, y, size, url, label) {
+  let out = '';
+  if (url && window.qrcode) {
+    const q = qrcode(0, 'L'); q.addData(url); q.make();
+    const n = q.getModuleCount(), m = size / (n + 2);
+    out += rect(x, y, size, size, '#ecebe5');
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++)
+      if (q.isDark(r, c)) out += rect((x + (c + 1) * m).toFixed(2), (y + (r + 1) * m).toFixed(2), (m + 0.3).toFixed(2), (m + 0.3).toFixed(2));
+  } else {
+    out += `<rect x="${x}" y="${y}" width="${size}" height="${size}" fill="#d6d4cc"/>`;
+    [[0,0],[size-size*0.3,0],[0,size-size*0.3]].forEach(([dx,dy]) => out += `<rect x="${x+dx+4}" y="${y+dy+4}" width="${size*0.3-8}" height="${size*0.3-8}" fill="none" stroke="#9a988f" stroke-width="${size*0.05}"/>`);
+  }
+  if (label) out += T(x + size / 2, y + size + 8, label, 20, 700, 'middle');
+  return out;
+}
+
+const SEASON = {
+  winter: { icon: 'snow', cond: 'Light snow', t: '29°', feels: '22°', out: 'Snow showers · 60% precip', hl: 'High 31° · Low 18°', wind: 'Wind 8 mph NW', date: 'Saturday, January 16', spa: 'Spa 101°  set 102°' },
+  nov:    { icon: 'cloud', cond: 'Cloudy', t: '39°', feels: '35°', out: 'Partly cloudy · 20% precip', hl: 'High 44° · Low 27°', wind: 'Wind 5 mph SE', date: 'Thursday, November 19', spa: 'Spa 96°  set 96°' },
+  summer: { icon: 'sun', cond: 'Sunny', t: '74°', feels: '74°', out: 'Sunny · 10% precip', hl: 'High 79° · Low 55°', wind: 'Wind 4 mph W', date: 'Saturday, July 18', spa: 'Spa 99°  set 100°' }
+};
+function chrome(pageIdx, pages, season) {
+  const w = SEASON[season || 'winter'];
+  let s = rect(0, 0, W, 825, '#ecebe5');
+  s += icons[w.icon](100, 82, 70);
+  s += T(100, 165, w.cond, 26, 700, 'middle');
+  s += T(205, 8, w.t, 120, 900);
+  s += T(215, 145, 'Feels like ' + w.feels, 26, 700);
+  s += T(495, 14, 'TODAY', 30, 700);
+  s += T(495, 56, w.out, 26, 700);
+  s += T(495, 92, w.hl, 26, 700);
+  s += T(495, 128, w.wind, 26, 700);
+  s += icons.mountain(985, 22, 110);
+  s += T(1040, 140, "STARGAZER'S SUMMIT", 18, 700, 'middle', 'letter-spacing="2"');
+  s += rect(30, 200, W - 60, 2);
+  s += rect(30, 752, W - 60, 2);
+  s += icons.tub(30, 764, 42, false);
+  s += T(84, 769, w.spa, 30, 700);
+  const n = pages, dx = W / 2 - (n - 1) * 14;
+  for (let p = 0; p < n; p++)
+    s += `<circle cx="${dx + p * 28}" cy="788" r="7" ${p === pageIdx ? `fill="${INK}"` : `fill="none" stroke="${INK}" stroke-width="2"`}/>`;
+  s += T(W - 70, 774, w.date, 26, 700, 'end');
+  s += icons.wifi(W - 52, 772, 26);
+  return s;
+}
+
+function sectionTitle(text, right) {
+  let s = T(30, 218, text, 30, 900, 'start', 'letter-spacing="1"');
+  if (right) s += T(W - 30, 224, right, 22, 700, 'end');
+  return s;
+}
+
+function ski() {
+  let s = chrome(2, 5) + sectionTitle('SKI REPORT', 'updated 7:30 AM');
+  const R = [
+    { n: 'Bretton Woods', d: '25 min', st: 'OPEN', h: '8:30 – 4:00', tr: '58/63', lf: '7/8', base: '22–36"', nw: '4"', px: 'from $89', qr: 'https://www.brettonwoods.com/snow-trail-report/' },
+    { n: 'Cannon', d: '40 min', st: 'OPEN', h: '8:30 – 4:00', tr: '71/97', lf: '8/9', base: '18–30"', nw: '3"', px: 'from $79', qr: 'https://www.cannonmt.com/mountain-report' },
+    { n: 'Burke', d: '45 min', st: 'OPEN', h: '9:00 – 4:00', tr: '40/55', lf: '3/4', base: '20–32"', nw: '5"', px: 'from $85', qr: 'https://www.skiburke.com' }
+  ];
+  R.forEach((r, i) => {
+    const x = 30 + i * 385, w = 365;
+    s += box(x, 262, w, 478);
+    s += T(x + 20, 278, r.n, 36, 900);
+    s += T(x + 20, 322, r.d + ' away', 22, 700);
+    s += rect(x + 20, 360, 118, 44); s += T(x + 79, 368, r.st, 26, 900, 'middle', 'fill="#ecebe5"');
+    s += T(x + 152, 368, r.h, 26, 700);
+    const rows = [['Trails', r.tr], ['Lifts', r.lf], ['Base', r.base], ['New 24h', r.nw], ['Lift ticket', r.px]];
+    rows.forEach(([k, v], j) => { s += T(x + 20, 424 + j * 40, k, 24, 500); s += T(x + w - 20, 424 + j * 40, v, 26, 900, 'end'); });
+    s += qr(x + w / 2 - 46, 622, 92, r.qr, '');
+    s += T(x + w / 2, 716, 'Conditions · tickets', 16, 500, 'middle');
+  });
+  return s;
+}
+
+function skiDetail() {
+  let s = chrome(3, 5) + sectionTitle('BRETTON WOODS TODAY', 'open 8:30 – 4:00');
+  s += `<rect x="30" y="262" width="640" height="478" fill="none" stroke="${INK}" stroke-width="3" stroke-dasharray="10 8"/>`;
+  s += icons.mountain(250, 380, 200);
+  s += T(350, 610, 'trail map image', 26, 700, 'middle');
+  s += T(350, 644, '(dithered 1-bit, supplied by you)', 22, 500, 'middle');
+  s += T(700, 270, 'LIFTS OPEN 7/8', 26, 900);
+  ['Skyway Gondola', 'Zephyr High Speed Quad', 'Bethlehem Express Quad II', 'West Mountain Express', 'Rosebrook Summit Express'].forEach((l, i) => s += T(700, 310 + i * 32, '• ' + l, 22, 500));
+  s += T(700, 486, 'TERRAIN OPEN', 26, 900);
+  [['Trails', '58/63'], ['Glades', '12/40'], ['Miles', '33/37'], ['New 24h', '4"']].forEach(([k, v], i) => { s += T(700, 526 + i * 32, k, 22, 500); s += T(1020, 526 + i * 32, v, 22, 900, 'end'); });
+  s += qr(1060, 600, 110, 'https://store.brettonwoods.com/s/tickets', 'Tickets');
+  s += T(700, 700, 'Snowmaking: yes  ·  Grooming: yes', 20, 500);
+  return s;
+}
+
+function sled() {
+  let s = chrome(4, 5) + sectionTitle('SNOWMOBILING', 'trails reported open');
+  s += box(30, 262, 360, 478);
+  s += icons.snow(110, 330, 46);
+  s += T(170, 300, 'SNOW AT THE HOUSE', 17, 900);
+  s += T(170, 326, '14"', 64, 900);
+  const cond = [['New in 48h', '6"'], ['Riding temp', '18°'], ['Wind chill', '4°'], ['Sunset', '4:32 PM']];
+  cond.forEach(([k, v], j) => { s += T(52, 430 + j * 44, k, 24, 500); s += T(370, 430 + j * 44, v, 26, 900, 'end'); });
+  s += T(52, 620, 'Ride the marked trails', 20, 500);
+  s += T(52, 646, 'only. Check club reports', 20, 500);
+  s += T(52, 672, 'before heading out.', 20, 500);
+  s += box(410, 262, 400, 478);
+  s += icons.sled(430, 278, 52);
+  s += T(492, 296, 'RENTALS NEARBY', 24, 900);
+  const rentals = [['The Snowyard', 'Littleton', '603-444-7694'], ['Feel the Thunder', 'Groveton', '603-788-2281'], ['Northeast Snowmobile', 'Gorham', '800-458-1838'], ['Jericho Adventures', 'Berlin', '603-403-0030']];
+  rentals.forEach(([n, t, p], j) => { s += T(430, 360 + j * 90, n, 26, 900); s += T(430, 394 + j * 90, t + '  ·  ' + p, 22, 500); });
+  s += box(830, 262, 340, 478);
+  s += qr(855, 290, 130, 'https://www.wildlife.nh.gov/highway-recreational-vehicles-ohrv-and-snowmobiles/registering-your-ohrv-or-snowmobile', 'Registration');
+  s += qr(1010, 290, 130, 'https://wildlife.nh.gov/highway-recreational-vehicles-ohrv-and-snowmobiles/nh-ohrvsnowmobile-rental-agents', 'All rentals');
+  s += qr(932, 500, 130, 'https://www.eregulations.com/assets/docs/resources/NH/2025-New-Hampshire-Snowmobile-Trail-Map.pdf', 'NH trail map');
+  s += T(1000, 680, 'Rental sleds: ask the', 18, 500, 'middle');
+  s += T(1000, 702, 'outfitter about registration', 18, 500, 'middle');
+  return s;
+}
+
+function santa() {
+  let s = chrome(1, 3, 'nov') + sectionTitle("SANTA'S VILLAGE", 'Jefferson, NH');
+  s += icons.tree(50, 280, 150);
+  s += T(230, 286, 'CHRISTMASTIME', 30, 900);
+  s += T(230, 330, 'Open this weekend', 26, 500);
+  s += rect(230, 380, 560, 120); s += T(254, 398, 'SATURDAY, NOV 21', 30, 900, 'start', 'fill="#ecebe5"'); s += T(254, 446, '11 AM – 7 PM', 40, 900, 'start', 'fill="#ecebe5"');
+  s += box(230, 520, 560, 110); s += T(254, 538, 'SUNDAY, NOV 22', 30, 900); s += T(254, 582, '11 AM – 6 PM', 36, 900);
+  s += T(230, 660, 'Next: Fri Nov 27 · Sat Nov 28 · Sun Nov 29', 22, 500);
+  s += T(230, 690, 'Last day of the season Sun Dec 20 · NYE party Dec 31, 4 – 9 PM', 22, 500);
+  s += qr(850, 300, 140, 'https://secure.interactiveticketing.com/1.43/faaba3/', 'Tickets');
+  s += qr(1020, 300, 140, 'https://www.santasvillage.com/park-info-tickets/dates-hours', 'Calendar');
+  s += T(1005, 520, 'Tickets are sold', 22, 500, 'middle');
+  s += T(1005, 548, 'online by date', 22, 500, 'middle');
+  return s;
+}
+
+function hike() {
+  let s = chrome(2, 3, 'summer') + sectionTitle('HIKES NEAR THE HOUSE', 'trail of the day: Mt Prospect');
+  const H = [
+    { n: 'Mt Prospect', w: 'Weeks State Park, Lancaster', d: 'fire tower, summit views', url: 'https://hikenewengland.com/Prospect021116.php' },
+    { n: 'Cherry Mountain', w: "Owl's Head, Jefferson", d: 'ledges over the Presidentials', url: '' },
+    { n: 'Pondicherry Refuge', w: 'Jefferson / Whitefield', d: 'flat, ponds and birding', url: '' },
+    { n: 'Mt Starr King', w: 'Jefferson', d: 'steady climb, summit chimney', url: '' },
+    { n: 'Mt Cabot', w: 'Kilkenny, Lancaster', d: '4,000-footer, fire cabin', url: '' }
+  ];
+  H.forEach((h, i) => {
+    const col = i < 3 ? i : i - 3, row = i < 3 ? 0 : 1;
+    const x = row === 0 ? 30 + col * 385 : 222 + col * 385, y = row === 0 ? 262 : 506, w = 365, hgt = 228;
+    s += box(x, y, w, hgt);
+    s += icons.boot(x + 18, y + 18, 34);
+    s += T(x + 62, y + 20, h.n, 28, 900);
+    s += T(x + 18, y + 66, h.w, 20, 700);
+    s += T(x + 18, y + 96, h.d, 20, 500);
+    s += T(x + 18, y + 130, 'distance · gain · time', 18, 500, 'start', 'fill="#6b6a65"');
+    s += qr(x + w - 100, y + hgt - 104, 88, h.url, '');
+  });
+  s += T(1060, 556, 'hikeSafe:', 22, 900, 'middle');
+  s += T(1060, 586, 'tell someone your', 18, 500, 'middle');
+  s += T(1060, 610, 'route and be back', 18, 500, 'middle');
+  s += T(1060, 634, 'before dark', 18, 500, 'middle');
+  return s;
+}
+
+const draw = () => {
+  document.getElementById('s-ski').innerHTML = ski();
+  document.getElementById('s-skidetail').innerHTML = skiDetail();
+  document.getElementById('s-sled').innerHTML = sled();
+  document.getElementById('s-santa').innerHTML = santa();
+  document.getElementById('s-hike').innerHTML = hike();
+};
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw); else draw();
+</script>
+</body>
+</html>
