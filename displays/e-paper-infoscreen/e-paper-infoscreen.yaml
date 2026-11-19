@@ -1136,6 +1136,18 @@ display:
           // ===== footer: spa, page dots, date ===================================
           it.filled_rectangle(30, 752, W - 60, 2, COLOR_OFF);
           it.printf(30, 764, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", icon["hot-tub"].c_str());
+          // the person in the tub only shows while it's in use (light on, or jets
+          // running outside the filter cycle). The original 225 px icon centered at
+          // (450,655) blanked the box (360,574) 85x80; scale that box to this icon.
+          bool tub_in_use = id(hottub_light).state || (id(hottub_pump).state && !id(hottub_cleaning).state);
+          if (!tub_in_use) {
+            int hx, hy, hw, hh, sx, sy, sw, sh;
+            it.get_text_bounds(450, 655, icon["hot-tub"].c_str(), id(font_mdi_huge), TextAlign::CENTER, &hx, &hy, &hw, &hh);
+            it.get_text_bounds(30, 764, icon["hot-tub"].c_str(), id(font_mdi_medium), TextAlign::TOP_LEFT, &sx, &sy, &sw, &sh);
+            if (hw > 0 && hh > 0)
+              it.filled_rectangle(sx + (360 - hx) * sw / hw, sy + (574 - hy) * sh / hh,
+                                  (85 * sw + hw - 1) / hw, (80 * sh + hh - 1) / hh, COLOR_ON);
+          }
           std::string spa = "Spa " + f0(id(hottub_temp).state) + "°  set " + f0(id(hottub_setpoint).state) + "°";
           it.printf(80, 769, id(small), COLOR_OFF, TextAlign::TOP_LEFT, "%s", spa.c_str());
           int ix = 80 + text_w(spa, id(small)) + 18;
