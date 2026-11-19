@@ -165,3 +165,35 @@ IR blaster: `remote_transmitter` on **GPIO13**. GPIO12 is a boot strapping pin
 slot's pins, so the SD card is not used. An IR LED needs a transistor driver
 (e.g. 2N2222 or an N-MOSFET with a 22-47 Ohm series resistor from 3.3-5 V);
 the GPIO alone gives very little range.
+
+## Seasonal pages (2026-11-19)
+
+Body pages rotate every 10 minutes through the ones that are in season:
+
+| # | Page | Shown when |
+|---|---|---|
+| 0 | Today: AI 8-hour forecast + next five hours | always |
+| 1 | 5-day forecast | forecast loaded |
+| 2 | Hikes near the house | under 1 in of snow at the house |
+| 3 | Santa's Village | open later today or in the next 3 days |
+
+- **Hikes:** the 17 hikes on our AllTrails list (the paddling trail is left
+  out), nearest first by drive time from the house, six per set. Each visit
+  to the page shows the next set; set 1 is the six highlights. Each card has
+  the drive time, distance, route type, difficulty and a QR code to the trail;
+  the right column has a QR code to the whole list. Data is in the
+  `weather_page1` lambda (`HIKES[]`, `SETS[][]`).
+- **Snow depth:** the frame fetches Open-Meteo's modelled snow depth for the
+  house every 3 hours (and on wake until it has one) and publishes it to HA as
+  "Snow depth at house". HA's Scrape helper can't read JSON, hence on-device.
+- **Santa's Village:** dates and hours come from the `santa_days` global
+  (2026 Christmastime schedule from santasvillage.com). **Update it each fall.**
+  QR codes: Christmastime tickets and the park calendar.
+- **Testing:** `input_select.e_ink_page` (dashboard: "Page override") pins a
+  page whether or not it's in season; `auto` resumes the rotation. While a
+  page is pinned, Next page steps through its sets (the three hike sets).
+- QR codes reuse one `qr_code` object (`qr_dyn`, set_value then draw), because
+  each one holds a ~4 KB buffer in internal RAM.
+- To add a page: bump `NUM_PAGES` and add its eligibility in both page tables
+  (`weather_page1` lambda and the `next_page` script), the override names in
+  both places plus the `page_override` text sensor, then its body block.
