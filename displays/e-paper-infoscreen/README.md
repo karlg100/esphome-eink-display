@@ -178,6 +178,7 @@ Body pages rotate every 10 minutes through the ones that are in season:
 | 3 | Santa's Village | open later today or in the next 3 days |
 | 4 | Ski report (Bretton Woods, Cannon, Burke) | lifts open anywhere, or `input_datetime.ski_season_opening_day` within 3 days |
 | 5 | Snowmobiling | 6"+ of snow at the house, Dec 15 - Mar 31 |
+| 6-8 | Bretton Woods / Cannon / Burke: trail map, each lift, QR codes | that resort has lifts turning; before any resort opens, all three alongside page 4 |
 
 - **Hikes:** the 17 hikes on our AllTrails list (the paddling trail is left
   out), nearest first by drive time from the house, six per set. Each visit
@@ -238,7 +239,22 @@ are on the dev board but not used.)
 - **Opening day:** set `input_datetime.ski_season_opening_day` when the resorts
   announce it; the page shows 3 days ahead and the date appears top right.
 - Drive times are OSRM estimates from the house (rural roads read slow).
-- No trail-map pages yet: they need the resort maps as images in `images/`.
+- **Per-lift status:** `sensor.bretton_woods_lift_status`,
+  `sensor.cannon_lift_status`, `sensor.burke_lift_status`, one letter per lift
+  in the resort's own list order (O open, C closed, H on hold). Bretton Woods
+  is one Scrape sensor (`ul.trail-reports__table` 0, the status words). Cannon
+  and Burke show status as icons, so each lift is its own hidden Scrape sensor
+  (`sensor.cannon_lift_1`..`9`: `table.min-w-full.bg-white svg` 3-11,
+  attribute `aria-label`; `sensor.burke_lift_1`..`5`:
+  `div.fs-table table tbody span.uk-icon` 0-4, attribute `uk-icon`) joined by
+  a template helper. The lift names are in the page code in the same order.
+- **Trail maps and logos** are not in this repository (they're the resorts'
+  artwork). The `web_image` image platform (`components/web_image/`)
+  downloads each URL once into the builder's `.esphome/web_image/` and reuses
+  that file on every later build, then crops, lightens and Atkinson-dithers it
+  to 1-bit at compile time. New season's map: change the URL (or delete the
+  cached file) and rebuild.
+- **Lift ticket prices:** placeholder (`$ —`) for now.
 - **Snowmobiling:** snow depth (Open-Meteo), temperature, wind chill,
   `sensor.sunset_time` (HA template), four rental outfitters, QR codes for NH
   Fish & Game registration and rental agents, and NH State Parks trails.

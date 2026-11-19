@@ -65,8 +65,10 @@ external_components:
       url: https://github.com/karlg100/esphome-eink-display
       ref: main
       path: displays/e-paper-infoscreen/components
-    components: [inkplate]
-    refresh: 1h
+    # web_image: trail maps and resort logos, downloaded once per builder and
+    # dithered at compile time (displays/e-paper-infoscreen/components/web_image)
+    components: [inkplate, web_image]
+    refresh: always
 #  - source:
 #      type: git
 #      url: https://github.com/karlg100/esphome-display-screenshot
@@ -198,6 +200,11 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'false'
+# per-resort map pages: that resort has lifts turning (or, before any resort
+# opens, while the ski page is up for opening day): Bretton Woods, Cannon, Burke
+  - id: ski_res_ok
+    type: std::array<bool, 3>
+    restore_value: no
 # Santa's Village is open today (still) or within the next 3 days
   - id: santa_soon
     type: bool
@@ -800,6 +807,20 @@ text_sensor:
     id: ski_bk_new
     entity_id: sensor.burke_new_snow_24h
     internal: true
+  # per-lift status, one letter per lift in the resort's own list order:
+  # O open, C closed, H on hold (HA scrape + template helpers)
+  - platform: homeassistant
+    id: ski_bw_liftst
+    entity_id: sensor.bretton_woods_lift_status
+    internal: true
+  - platform: homeassistant
+    id: ski_cn_liftst
+    entity_id: sensor.cannon_lift_status
+    internal: true
+  - platform: homeassistant
+    id: ski_bk_liftst
+    entity_id: sensor.burke_lift_status
+    internal: true
   # opening day, set in HA when the resorts announce it (input_datetime)
   - platform: homeassistant
     id: ski_opening
@@ -1182,19 +1203,74 @@ font:
     glyphs: *mdi-weather-glyphs
 
 image:
-  - file: "images/ss-white-cropped.png"
+  - platform: file
+    file: "images/ss-white-cropped.png"
     id: ss_logo_white
     type: GRAYSCALE
 #    transparency: alpha_channel
 #    resize: 400x400
-  - file: "images/ss-black-cropped.png"
+  - platform: file
+    file: "images/ss-black-cropped.png"
     id: ss_logo_black
     type: BINARY
 #    resize: 1200x883
-  - file: "images/ss-black-on-white-large.png"
+  - platform: file
+    file: "images/ss-black-on-white-large.png"
     id: ss_logo_big_black
     resize: 500x381
     type: binary
+
+  # Ski resort trail maps and logos, straight from each resort's site. They are
+  # not in this repository: the builder downloads each once into
+  # .esphome/web_image/ and reuses that copy on every later build. A new
+  # season's map has a new URL, so changing the URL here fetches it.
+  # Maps: cropped to the lift-served terrain, lightened (gamma) so snow stays
+  # white, then Atkinson-dithered, which keeps trail lines crisp on e-paper.
+  - platform: web_image
+    id: map_bw
+    url: https://www.brettonwoods.com/content/uploads/2026/11/bretton-woods-w26-winter-activities-alpine-trailmap-scaled.jpg
+    resize: 660x400
+    crop: [0.0, 0.02, 0.90, 0.80]
+    autocontrast: 1
+    gamma: 0.6
+    sharpen: true
+    dither: ATKINSON
+  - platform: web_image
+    id: map_cannon
+    url: https://admin.cannonmt.com/publicFiles/documents/2526_Cannon_TrailMap_Digital.jpg
+    resize: 660x400
+    crop: [0.19, 0.07, 0.975, 0.81]
+    autocontrast: 1
+    gamma: 0.6
+    sharpen: true
+    dither: ATKINSON
+  - platform: web_image
+    id: map_burke
+    url: https://skiburke.com/images/Ski/20-21TrailMapLarge.jpg
+    resize: 660x400
+    crop: [0.0, 0.15, 1.0, 0.95]
+    autocontrast: 1
+    gamma: 0.6
+    sharpen: true
+    dither: ATKINSON
+  # Logos: black ink on white, at most 220x56
+  - platform: web_image
+    id: logo_bw
+    # the white "Bretton Woods" wordmark (right of the badge), alpha as ink
+    url: https://www.brettonwoods.com/content/themes/base/assets/img/bretton-logo.svg
+    resize: 220x56
+    crop: [0.44, 0.0, 1.0, 1.0]
+    alpha_as_ink: true
+  - platform: web_image
+    id: logo_cannon
+    url: https://admin.cannonmt.com/publicFiles/images/Logos/CannonLogo_White.png
+    resize: 220x56
+    alpha_as_ink: true
+  - platform: web_image
+    id: logo_burke
+    url: https://skiburke.com/images/burke-mtn-primary-horizontal-4c-rgb.png
+    resize: 220x56
+    threshold: 170
 #    use_transparency: True
 #  - file: mdi:alert-outline
 #    id: alert
@@ -1371,7 +1447,7 @@ display:
 
           // Which body pages have data right now. Keep in sync with the
           // 10-minute rotation interval. Seasonal pages get added here.
-          const int NUM_PAGES = 6;
+          const int NUM_PAGES = 9;
           bool page_ok[NUM_PAGES] = {
             true,                                                                      // 0: today (AI forecast + hourly)
             id(d1_conditions).has_state() && !std::isnan(id(d1_temp_high).state),      // 1: 5-day
@@ -1379,6 +1455,9 @@ display:
             id(santa_soon),                                                            // 3: Santa's Village (open within 3 days)
             id(ski_soon),                                                              // 4: ski report (lifts open / opening soon)
             id(sled_soon),                                                             // 5: snowmobiling (6"+ snow, Dec 15 - Mar 31)
+            id(ski_res_ok)[0],                                                         // 6: Bretton Woods map + lifts
+            id(ski_res_ok)[1],                                                         // 7: Cannon map + lifts
+            id(ski_res_ok)[2],                                                         // 8: Burke map + lifts
           };
           // HA page override (input_select.e_ink_page) pins a page, in season or not
           int forced = -1;
@@ -1387,6 +1466,7 @@ display:
             if (o == "today") forced = 0; else if (o == "5-day") forced = 1; else if (o == "hikes") forced = 2;
             else if (o == "santa") forced = 3;
             else if (o == "ski") forced = 4; else if (o == "snowmobile") forced = 5;
+            else if (o == "bretton_woods") forced = 6; else if (o == "cannon") forced = 7; else if (o == "burke") forced = 8;
           }
           if (forced >= 0) page_ok[forced] = true;
           int page = forced >= 0 ? forced : id(page_idx);
@@ -1617,20 +1697,20 @@ display:
               if (sscanf(s.c_str(), " %d", &v) == 1) return str_sprintf("%d%s", v, unit);
               return "–";
             };
-            struct Resort { const char *name, *dist; bool open; std::string r1k, r1, r2k, r2, r3k, r3; const char *url; };
+            struct Resort { const char *name, *dist; bool open; std::string r1k, r1, r2k, r2, r3k, r3; const char *url; image::Image *logo; };
             Resort R[3] = {
               {"Bretton Woods", "22 mi · 37 min", opened(id(ski_bw_lifts).state) > 0,
                "Trails", pair(id(ski_bw_trails).state), "Lifts", pair(id(ski_bw_lifts).state),
                "Updated", id(ski_bw_updated).state.empty() ? std::string("–") : id(ski_bw_updated).state,
-               "https://www.brettonwoods.com/snow-trail-report/"},
+               "https://www.brettonwoods.com/snow-trail-report/", id(logo_bw)},
               {"Cannon", "29 mi · 48 min", opened(id(ski_cn_lifts).state) > 0,
                "Trails open", num(id(ski_cn_trails).state, ""), "Lifts open", num(id(ski_cn_lifts).state, ""),
                "Season snow", num(id(ski_cn_snow).state, "\""),
-               "https://www.cannonmt.com/mountain-report"},
+               "https://www.cannonmt.com/mountain-report", id(logo_cannon)},
               {"Burke", "37 mi · 70 min", opened(id(ski_bk_lifts).state) > 0,
                "Trails", pair(id(ski_bk_trails).state), "Lifts", pair(id(ski_bk_lifts).state),
                "New 24h", num(id(ski_bk_new).state, "\""),
-               "https://skiburke.com/the-mountain/weather-conditions"},
+               "https://skiburke.com/the-mountain/weather-conditions", id(logo_burke)},
             };
 
             it.print(30, 216, id(small), COLOR_OFF, TextAlign::TOP_LEFT, "SKI REPORT");
@@ -1657,21 +1737,24 @@ display:
               const int x = 30 + i * 385, w = 365;
               it.rectangle(x, 262, w, 478, COLOR_OFF);
               it.rectangle(x + 1, 263, w - 2, 476, COLOR_OFF);
-              it.print(x + 20, 278, id(small), COLOR_OFF, TextAlign::TOP_LEFT, r.name);
-              it.print(x + 20, 318, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, r.dist);
+              // resort logo (downloaded at build time; it carries the name)
+              it.image(x + 20, 274, r.logo);
+              it.print(x + 20, 334, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, r.dist);
               // open / closed, white on black when open
-              if (r.open) it.filled_rectangle(x + 20, 354, 140, 42, COLOR_OFF);
-              else { it.rectangle(x + 20, 354, 140, 42, COLOR_OFF); it.rectangle(x + 21, 355, 138, 40, COLOR_OFF); }
-              it.print(x + 90, 375, id(label), r.open ? COLOR_ON : COLOR_OFF, TextAlign::CENTER, r.open ? "OPEN" : "CLOSED");
-              const std::string *rows[3][2] = {{&r.r1k, &r.r1}, {&r.r2k, &r.r2}, {&r.r3k, &r.r3}};
-              for (int j = 0; j < 3; j++) {
-                int y = 424 + j * 44;
+              if (r.open) it.filled_rectangle(x + 20, 366, 140, 42, COLOR_OFF);
+              else { it.rectangle(x + 20, 366, 140, 42, COLOR_OFF); it.rectangle(x + 21, 367, 138, 40, COLOR_OFF); }
+              it.print(x + 90, 387, id(label), r.open ? COLOR_ON : COLOR_OFF, TextAlign::CENTER, r.open ? "OPEN" : "CLOSED");
+              // lift ticket prices: placeholder until there's a source for them
+              static const std::string TICKET_K = "Lift ticket", TICKET_V = "$ —";
+              const std::string *rows[4][2] = {{&r.r1k, &r.r1}, {&r.r2k, &r.r2}, {&r.r3k, &r.r3}, {&TICKET_K, &TICKET_V}};
+              for (int j = 0; j < 4; j++) {
+                int y = 424 + j * 38;
                 it.print(x + 20, y, id(label), COLOR_OFF, TextAlign::TOP_LEFT, rows[j][0]->c_str());
                 it.print(x + w - 20, y, id(label), COLOR_OFF, TextAlign::TOP_RIGHT, rows[j][1]->c_str());
               }
               id(qr_dyn).set_value(r.url);
-              it.qr_code(x + w / 2 - 50, 572, id(qr_dyn), COLOR_OFF, 3);
-              it.print(x + w / 2, 692, id(tiny), COLOR_OFF, TextAlign::TOP_CENTER, "Conditions · tickets");
+              it.qr_code(x + w / 2 - 50, 576, id(qr_dyn), COLOR_OFF, 3);
+              it.print(x + w / 2, 696, id(tiny), COLOR_OFF, TextAlign::TOP_CENTER, "Conditions");
             }
           } else if (page == 5) {
             // Snowmobiling: snow at the house, riding conditions, rentals, QR codes
@@ -1732,6 +1815,88 @@ display:
             it.print(1000, 544, id(tiny), COLOR_OFF, TextAlign::TOP_CENTER, "Trails & conditions");
             it.print(1000, 620, id(tiny), COLOR_OFF, TextAlign::TOP_CENTER, "Rental sleds: ask the");
             it.print(1000, 646, id(tiny), COLOR_OFF, TextAlign::TOP_CENTER, "outfitter about registration");
+          } else if (page >= 6 && page <= 8) {
+            // One resort: its trail map (downloaded and dithered at build time),
+            // each lift open / closed, the day's numbers, QR codes.
+            auto pair = [](const std::string &s) -> std::string {
+              int o, t;
+              if (sscanf(s.c_str(), " %d/%d", &o, &t) == 2) return str_sprintf("%d/%d", o, t);
+              return "–";
+            };
+            auto num = [](const std::string &s, const char *unit) -> std::string {
+              int v;
+              if (sscanf(s.c_str(), " %d", &v) == 1) return str_sprintf("%d%s", v, unit);
+              return "–";
+            };
+            static const char *BW_LIFTS[] = {"Bethlehem Express Quad II", "Skyway Gondola", "Learning Center Quad",
+                                             "Rosebrook Summit Express", "Telegraph T-Bar", "West Mountain Express",
+                                             "Wonder Carpet", "Zephyr High Speed Quad"};
+            static const char *CN_LIFTS[] = {"Cannonball Quad", "Peabody Express Quad", "Zoomer Triple",
+                                             "Tuckerbrook Quad", "Eagle Cliff Triple", "Brookside Triple",
+                                             "Mittersill Double", "Valar T-Bar", "Huckerbrook Handle Tow"};
+            static const char *BK_LIFTS[] = {"Mid-Burke Express", "Sherburne Express", "T-Bar", "J-Bar", "Magic Carpet"};
+            const int r = page - 6;
+            const char *const *lifts = r == 0 ? BW_LIFTS : r == 1 ? CN_LIFTS : BK_LIFTS;
+            const int n_lifts = r == 0 ? 8 : r == 1 ? 9 : 5;
+            const std::string &st = (r == 0 ? id(ski_bw_liftst) : r == 1 ? id(ski_cn_liftst) : id(ski_bk_liftst))->state;
+            image::Image *logo = r == 0 ? id(logo_bw) : r == 1 ? id(logo_cannon) : id(logo_burke);
+            image::Image *map = r == 0 ? id(map_bw) : r == 1 ? id(map_cannon) : id(map_burke);
+            static const char *DIST[3] = {"22 mi · 37 min drive", "29 mi · 48 min drive", "37 mi · 70 min drive"};
+            static const char *MAP_URL[3] = {"https://www.brettonwoods.com/plan-visit/maps/",
+                                             "https://www.cannonmt.com/trail-map",
+                                             "https://skiburke.com/the-mountain/skiing-riding"};
+            static const char *TIX_URL[3] = {"https://store.brettonwoods.com/s/tickets",
+                                             "https://www.cannonmt.com/tickets",
+                                             "https://skiburke.com/lift-tickets"};
+            std::string tk[2], tv[2];
+            if (r == 0) { tk[0] = "Trails"; tv[0] = pair(id(ski_bw_trails).state); tk[1] = "Updated";
+                          tv[1] = id(ski_bw_updated).state.empty() ? std::string("–") : id(ski_bw_updated).state; }
+            else if (r == 1) { tk[0] = "Trails open"; tv[0] = num(id(ski_cn_trails).state, ""); tk[1] = "Season snow"; tv[1] = num(id(ski_cn_snow).state, "\""); }
+            else { tk[0] = "Trails"; tv[0] = pair(id(ski_bk_trails).state); tk[1] = "New 24h"; tv[1] = num(id(ski_bk_new).state, "\""); }
+
+            // title: logo + TODAY, drive time on the right
+            it.image(30, 200, logo);
+            it.print(30 + logo->get_width() + 16, 200 + logo->get_height() / 2, id(small), COLOR_OFF, TextAlign::CENTER_LEFT, "TODAY");
+            it.print(1170, 222, id(label), COLOR_OFF, TextAlign::TOP_RIGHT, DIST[r]);
+
+            // map (at most 660x400) with a frame, then the lift ticket price
+            // under it (placeholder until there's a source for prices)
+            const int mw = map->get_width(), mh = map->get_height(), mx = 30 + (660 - mw) / 2;
+            it.image(mx, 262, map);
+            it.rectangle(mx, 262, mw, mh, COLOR_OFF);
+            it.rectangle(mx + 1, 263, mw - 2, mh - 2, COLOR_OFF);
+            it.print(30, 262 + mh + 22, id(label), COLOR_OFF, TextAlign::TOP_LEFT, "Lift ticket");
+            it.print(690, 262 + mh + 22, id(label), COLOR_OFF, TextAlign::TOP_RIGHT, "$ —");
+
+            // lifts: filled square = open, hollow = closed, hollow with a bar = on hold
+            int n_open = 0;
+            for (int i = 0; i < n_lifts; i++) if (i < (int) st.size() && st[i] == 'O') n_open++;
+            if (st.size() >= (size_t) n_lifts)
+              it.printf(716, 266, id(label), COLOR_OFF, TextAlign::TOP_LEFT, "LIFTS %d/%d", n_open, n_lifts);
+            else
+              it.print(716, 266, id(label), COLOR_OFF, TextAlign::TOP_LEFT, "LIFTS");
+            const int gap = n_lifts > 8 ? 29 : 31;
+            for (int i = 0; i < n_lifts; i++) {
+              int y = 306 + i * gap;
+              char c = i < (int) st.size() ? st[i] : '?';
+              if (c == 'O') it.filled_rectangle(718, y + 3, 16, 16, COLOR_OFF);
+              else { it.rectangle(718, y + 3, 16, 16, COLOR_OFF); it.rectangle(719, y + 4, 14, 14, COLOR_OFF); }
+              if (c == 'H') it.filled_rectangle(721, y + 10, 10, 3, COLOR_OFF);
+              it.print(744, y, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, lifts[i]);
+            }
+            const int ty = 306 + n_lifts * gap + 16;
+            for (int j = 0; j < 2; j++) {
+              it.print(716, ty + j * 34, id(label), COLOR_OFF, TextAlign::TOP_LEFT, tk[j].c_str());
+              it.print(1030, ty + j * 34, id(label), COLOR_OFF, TextAlign::TOP_RIGHT, tv[j].c_str());
+            }
+
+            // QR codes: the full trail map, tickets
+            id(qr_dyn).set_value(MAP_URL[r]);
+            it.qr_code(1052, 290, id(qr_dyn), COLOR_OFF, 3);
+            it.print(1104, 402, id(tiny), COLOR_OFF, TextAlign::TOP_CENTER, "Full map");
+            id(qr_dyn).set_value(TIX_URL[r]);
+            it.qr_code(1052, 450, id(qr_dyn), COLOR_OFF, 3);
+            it.print(1104, 562, id(tiny), COLOR_OFF, TextAlign::TOP_CENTER, "Tickets");
           }
 
           // ===== footer: spa, page dots, date ===================================
@@ -1851,7 +2016,7 @@ script:
   - id: next_page
     then:
       - lambda: |-
-          const int NUM_PAGES = 6;
+          const int NUM_PAGES = 9;
           bool page_ok[NUM_PAGES] = {
             true,
             id(d1_conditions).has_state() && !std::isnan(id(d1_temp_high).state),
@@ -1859,6 +2024,9 @@ script:
             id(santa_soon),
             id(ski_soon),
             id(sled_soon),
+            id(ski_res_ok)[0],
+            id(ski_res_ok)[1],
+            id(ski_res_ok)[2],
           };
           int forced = -1;
           {
@@ -1866,6 +2034,7 @@ script:
             if (o == "today") forced = 0; else if (o == "5-day") forced = 1; else if (o == "hikes") forced = 2;
             else if (o == "santa") forced = 3;
             else if (o == "ski") forced = 4; else if (o == "snowmobile") forced = 5;
+            else if (o == "bretton_woods") forced = 6; else if (o == "cannon") forced = 7; else if (o == "burke") forced = 8;
           }
           if (forced >= 0) {
             // pinned from HA: stay on it, and step through its sets
@@ -1974,6 +2143,16 @@ script:
                 if (c.year == y && c.month == mo && c.day_of_month == d) ski = true;
               }
             }
+            // per resort: lifts turning there; before any resort opens, all
+            // three while the ski page is up for opening day
+            bool res_open[3] = {
+              sscanf(id(ski_bw_lifts).state.c_str(), " %d/%d", &o, &t) == 2 && o > 0,
+              atoi(id(ski_cn_lifts).state.c_str()) > 0,
+              sscanf(id(ski_bk_lifts).state.c_str(), " %d/%d", &o, &t) == 2 && o > 0,
+            };
+            bool any_open = res_open[0] || res_open[1] || res_open[2];
+            for (int r = 0; r < 3; r++)
+              id(ski_res_ok)[r] = res_open[r] || (ski && !any_open);
             id(ski_soon) = ski;
             // snowmobile page: 6"+ on the ground at the house, Dec 15 - Mar 31
             id(sled_soon) = id(snow_depth_in).has_state() && id(snow_depth_in).state >= 6.0f && now.is_valid() &&
