@@ -134,6 +134,13 @@ globals:
     restore_value: no
     initial_value: '0'
 
+# set when the next mainLoop should redraw even if the main floor is empty
+# (page change, Next page / refresh buttons, someone walking in)
+  - id: draw_now
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
 deep_sleep:
 #  run_duration: alwasy
   id: deep_sleep_1
@@ -212,7 +219,18 @@ button:
     icon: mdi:run-fast
     id: run_mainloop
     on_press:
+      - globals.set:
+          id: draw_now
+          value: 'true'
       - script.execute: mainLoop
+
+  - platform: template
+    name: Next page
+    icon: mdi:page-next-outline
+    id: next_page_button
+    on_press:
+      - logger.log: "e-ink display - next page button"
+      - script.execute: next_page
 
 ####
 # Sensors to push to HA
@@ -528,6 +546,9 @@ text_sensor:
             lambda: 'return id(initial_draw_done);'
           then:
             - logger.log: "e-ink display - refresh button pressed"
+            - globals.set:
+                id: draw_now
+                value: 'true'
             - script.execute: mainLoop
 
 # log system state: running or deep sleep (and reason)
@@ -743,6 +764,31 @@ binary_sensor:
   - platform: homeassistant
     entity_id: binary_sensor.mountain_house_occupancy
     id: secondfloor_occupied
+
+  # main floor motion (the main thermostat's HomeKit motion sensor) - the floor
+  # the frame hangs on. Someone walking in redraws right away, quietly.
+  - platform: homeassistant
+    id: main_floor_motion
+    entity_id: binary_sensor.mountain_house_motion
+    on_press:
+      - if:
+          condition:
+            lambda: 'return id(initial_draw_done);'
+          then:
+            - logger.log: "e-ink display - main floor motion, refreshing"
+            - globals.set:
+                id: draw_now
+                value: 'true'
+            - script.execute: mainLoop
+
+  # on while there has been main floor motion in the last hour. When off nobody
+  # is watching: skip the minute-by-minute redraws, and the 10-minute page
+  # changes use a full refresh (no one sees the flash, and it clears ghosting).
+  - platform: homeassistant
+    id: main_floor_recent
+    entity_id: binary_sensor.mountain_house_motion
+    filters:
+      - delayed_off: 60min
 ####
 # Content
 ##
@@ -1135,21 +1181,10 @@ interval:
     then:
       - script.execute: mainLoop
 
-  # rotate the body to the next page that has data. Keep the eligibility
-  # checks in sync with page_ok[] in the weather_page1 lambda.
+  # rotate the body to the next page that has data every 10 minutes
   - interval: 10min
     then:
-      - lambda: |-
-          const int NUM_PAGES = 2;
-          bool page_ok[NUM_PAGES] = {
-            true,
-            id(d1_conditions).has_state() && !std::isnan(id(d1_temp_high).state),
-          };
-          for (int step = 1; step <= NUM_PAGES; step++) {
-            int p = (id(page_idx) + step) % NUM_PAGES;
-            if (page_ok[p]) { id(page_idx) = p; break; }
-          }
-      - script.execute: mainLoop
+      - script.execute: next_page
 
 remote_transmitter:
   carrier_duty_percent: 50%
@@ -1165,6 +1200,24 @@ script:
 #      - if:
 #        condition:
 #        refresh_count
+
+  # advance the body to the next page that has data, then redraw.
+  # Keep the eligibility checks in sync with page_ok[] in the weather_page1 lambda.
+  - id: next_page
+    then:
+      - lambda: |-
+          const int NUM_PAGES = 2;
+          bool page_ok[NUM_PAGES] = {
+            true,
+            id(d1_conditions).has_state() && !std::isnan(id(d1_temp_high).state),
+          };
+          for (int step = 1; step <= NUM_PAGES; step++) {
+            int p = (id(page_idx) + step) % NUM_PAGES;
+            if (page_ok[p]) { id(page_idx) = p; break; }
+          }
+          id(draw_now) = true;
+      - script.execute: mainLoop
+
   - id: mainLoop
     then:
       - logger.log: "e-ink display - interval start"
@@ -1231,17 +1284,33 @@ script:
             - lambda: |-
                 return (api::global_api_server != nullptr && api::global_api_server->is_connected()) ||
                        millis() - id(last_api_ok_ms) > 30UL * 60UL * 1000UL;
+            # someone on the main floor in the last hour, or a redraw was asked
+            # for (boot, page change, button, motion). Otherwise skip this minute.
+            - lambda: 'return id(main_floor_recent).state || !id(initial_draw_done) || id(draw_now);'
 #            - binary_sensor.is_on: secondfloor_occupied
           then:
             - logger.log: "e-ink display - showing weather page"
             - component.update: current_wind_direction
 #            - if:
 # KAG MOD            - lambda: id(inkplate_display).set_skip_reset(true);
+            # full refresh for the first weather draw after boot (wipes the welcome
+            # screen without leaving a ghost) and whenever nobody has been on the
+            # main floor for an hour (no one sees the flash, and it clears
+            # ghosting); otherwise a quiet partial update
+            - if:
+                condition:
+                  lambda: 'return !id(initial_draw_done) || !id(main_floor_recent).state;'
+                then:
+                  - logger.log: "e-ink display - full refresh (first draw or main floor empty)"
+                  - lambda: id(inkplate_display).block_partial();
             - display.page.show: weather_page1
             - component.update: inkplate_display
             - globals.set:
                 id: initial_draw_done
                 value: 'true'
+            - globals.set:
+                id: draw_now
+                value: 'false'
 
 # decide which sleep mode to go into
 # sleepy and occupied, short sleep

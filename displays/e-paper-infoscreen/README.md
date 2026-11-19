@@ -66,6 +66,20 @@ To add a page: bump `NUM_PAGES` and add its eligibility check in both the
 `weather_page1` lambda (`page_ok[]`) and the 10-minute rotation interval, then
 add its body block.
 
+## Main floor motion and refresh modes
+
+`binary_sensor.mountain_house_motion` (the main thermostat's HomeKit motion
+sensor, the floor the frame is on) decides how the screen refreshes:
+
+- **Someone on the main floor in the last hour:** redraws every minute as
+  quiet partial updates; walking in triggers an immediate redraw.
+- **Nobody for an hour:** the minute redraws are skipped; the 10-minute page
+  changes (and button presses) use a full refresh, which clears ghosting.
+- The first weather draw after a reboot is always a full refresh, so the
+  welcome screen leaves no ghost.
+
+A **Next page** button entity steps to the next page immediately.
+
 ## Data sources (2026-11-19)
 
 - Current conditions: Weather Underground station `weather.knhlanca3` and its
