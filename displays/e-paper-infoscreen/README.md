@@ -202,7 +202,8 @@ Body pages rotate every 10 minutes through the ones that are in season:
 
 The frame sends the IR codes captured and tested on the IR receiver/transmitter
 dev board (`candle-controller.yaml` in the mountain house builder): big candles
-on/off, Marcy's candle on/off, tea lights on/off, LED fireplace power (a toggle).
+on/off, tea lights on/off, LED fireplace power (a toggle). (Marcy's candle codes
+are on the dev board but not used.)
 
 - **Buttons** on the frame device in HA: one per code, plus "IR All candles
   on/off" and "IR Everything on".

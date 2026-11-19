@@ -296,16 +296,6 @@ button:
     on_press:
       - script.execute: candles_off_38k
   - platform: template
-    name: "IR Marcy candle on"
-    icon: mdi:candle
-    on_press:
-      - script.execute: marcycandle_on
-  - platform: template
-    name: "IR Marcy candle off"
-    icon: mdi:candle-off
-    on_press:
-      - script.execute: marcycandle_off
-  - platform: template
     name: "IR Tea lights on"
     icon: mdi:candelabra-fire
     on_press:
@@ -1902,9 +1892,6 @@ script:
       - script.execute: candles_on_38k
       - script.wait: candles_on_38k
       - delay: 400ms
-      - script.execute: marcycandle_on
-      - script.wait: marcycandle_on
-      - delay: 400ms
       - script.execute: tealights_on
       - script.wait: tealights_on
   # everything on (candles, tea lights, fireplace) / off (candles, tea lights;
@@ -1922,25 +1909,9 @@ script:
       - script.execute: candles_off_38k
       - script.wait: candles_off_38k
       - delay: 400ms
-      - script.execute: marcycandle_off
-      - script.wait: marcycandle_off
-      - delay: 400ms
       - script.execute: tealights_off
       - script.wait: tealights_off
 
-  # Marcy's candle
-  - id: marcycandle_on
-    then:
-      - remote_transmitter.transmit_pronto:
-          data: "0000 006D 0022 0000 0161 00AC 0018 0014 0017 0014 0017 0014 0017 0015 0017 0014 0016 0015 0016 0015 0017 0014 0017 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 0015 0017 0015 0017 0015 0017 0015 0017 0015 0017 0015 0016 0016 0017 0015 0018 003E 0017 003F 0018 003E 0018 003E 0016 0040 0017 003F 0017 003F 0018 003E 0017 0181"
-          repeat:
-            times: 5
-  - id: marcycandle_off
-    then:
-      - remote_transmitter.transmit_pronto:
-          data: "0000 006D 0022 0000 0160 00AD 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0040 0016 0040 0016 0040 0016 0040 0016 0040 0016 0040 0016 0040 0015 0041 0016 0040 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0015 0017 0016 0016 0015 0041 0015 0041 0015 0041 0015 0041 0015 0041 0015 0041 0015 0041 0015 0181"
-          repeat:
-            times: 5
   - id: fireplace_temp
     then:
       - remote_transmitter.transmit_pronto:
