@@ -128,6 +128,12 @@ globals:
     restore_value: no
     initial_value: '""'
 
+# which body page is showing (0 = today, 1 = 5-day); advanced every 10 minutes
+  - id: page_idx
+    type: int
+    restore_value: no
+    initial_value: '0'
+
 deep_sleep:
 #  run_duration: alwasy
   id: deep_sleep_1
@@ -427,6 +433,51 @@ sensor:
     entity_id: sensor.forecast_day_1_wind_speed
 
   - platform: homeassistant
+    id: d0_precip_prob
+    entity_id: sensor.forecast_day_1_precipitation_probability
+
+# days 2-5 (header "tomorrow" outlook and the 5-day page)
+  - platform: homeassistant
+    id: d1_temp_high
+    entity_id: sensor.forecast_day_2_temperature_high
+  - platform: homeassistant
+    id: d1_temp_low
+    entity_id: sensor.forecast_day_2_temperature_low
+  - platform: homeassistant
+    id: d1_precip_prob
+    entity_id: sensor.forecast_day_2_precipitation_probability
+
+  - platform: homeassistant
+    id: d2_temp_high
+    entity_id: sensor.forecast_day_3_temperature_high
+  - platform: homeassistant
+    id: d2_temp_low
+    entity_id: sensor.forecast_day_3_temperature_low
+  - platform: homeassistant
+    id: d2_precip_prob
+    entity_id: sensor.forecast_day_3_precipitation_probability
+
+  - platform: homeassistant
+    id: d3_temp_high
+    entity_id: sensor.forecast_day_4_temperature_high
+  - platform: homeassistant
+    id: d3_temp_low
+    entity_id: sensor.forecast_day_4_temperature_low
+  - platform: homeassistant
+    id: d3_precip_prob
+    entity_id: sensor.forecast_day_4_precipitation_probability
+
+  - platform: homeassistant
+    id: d4_temp_high
+    entity_id: sensor.forecast_day_5_temperature_high
+  - platform: homeassistant
+    id: d4_temp_low
+    entity_id: sensor.forecast_day_5_temperature_low
+  - platform: homeassistant
+    id: d4_precip_prob
+    entity_id: sensor.forecast_day_5_precipitation_probability
+
+  - platform: homeassistant
     id: dew_point
     entity_id: sensor.knhlanca3_dewpoint
 
@@ -719,6 +770,9 @@ font:
   - file: "gfonts://Inter@700"
     id: tiny
     size: 20
+  - file: "gfonts://Inter@700"
+    id: label
+    size: 26
 
   # Include Material Design Icons font
   # Thanks to https://community.home-assistant.io/t/display-materialdesign-icons-on-esphome-attached-to-screen/199790/16
@@ -778,6 +832,10 @@ font:
   - file: 'fonts/materialdesignicons-webfont.ttf'
     id: font_mdi_huge
     size: 225
+    glyphs: *mdi-weather-glyphs
+  - file: 'fonts/materialdesignicons-webfont.ttf'
+    id: font_mdi_header
+    size: 160
     glyphs: *mdi-weather-glyphs
 
 image:
@@ -858,15 +916,18 @@ display:
           it.fill(COLOR_ON);
       - id: weather_page1
         lambda: |-
+          // Layout (1200 x 825):
+          //   header  y   0-200  current temp + the day's outlook (stays put)
+          //   body    y 210-745  rotates every 10 min through the eligible pages
+          //   footer  y 755-825  spa, page dots, date
           it.fill(COLOR_ON);
-          //it.line(400, 0, 400, 600, COLOR_OFF);
+          const int W = it.get_width();
 
           // NaN-safe number formatting: show "--" for any value that hasn't loaded
           auto f0 = [](float v) -> std::string { return std::isnan(v) ? std::string("--") : str_sprintf("%.0f", v); };
-          auto f2 = [](float v) -> std::string { return std::isnan(v) ? std::string("--") : str_sprintf("%.2f", v); };
 
           // Map weather states to MDI characters.
-          std::map<std::string, std::string> weather_icon_map
+          std::map<std::string, std::string> icon
           {
             {"cloudy", "\U000F0590"},
             {"cloudy-alert", "\U000F0F2F"},
@@ -910,183 +971,160 @@ display:
             {"cleaning", "\U000F0D43"},
           };
 
+          // HA condition -> readable words
+          auto pretty = [](std::string c) -> std::string {
+            if (c == "partlycloudy") return "Partly cloudy";
+            if (c == "clear-night") return "Clear";
+            if (c == "lightning-rainy") return "Thunderstorms";
+            if (c == "snowy-rainy") return "Wintry mix";
+            if (c == "windy-variant") return "Windy";
+            if (c == "exceptional") return "Severe weather";
+            if (c.empty() || c == "unknown" || c == "unavailable") return "";
+            if (c[0] >= 'a' && c[0] <= 'z') c[0] -= 32;
+            return c;
+          };
 
+          auto text_w = [&](const std::string &t, font::Font *f) -> int {
+            int x1, y1, w, h;
+            it.get_text_bounds(0, 0, t.c_str(), f, TextAlign::TOP_LEFT, &x1, &y1, &w, &h);
+            return w;
+          };
 
-          //Current Weather
-          // Icon
-          it.printf(145, 0+20, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(cur_conditions).state.c_str()].c_str());
-
-          // Text readout
-          it.printf(145, 160+60, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(cur_conditions).state.c_str());
-
-          // current temp
-          it.printf(260, 20, id(big), COLOR_OFF, TextAlign::TOP_LEFT, "%s°F", f0(id(cur_temp).state).c_str());
-          it.printf(260, 150, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Feels Like %s°F", f0(id(cur_realfeel_temp).state).c_str());
-
-          // Wind speed and direction
-          // was 550 then 150,180
-          it.printf(600, 50, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Winds %s Mph %s", f0(id(current_wind_speed).state).c_str(), id(current_wind_direction).state.c_str());
-          //it.printf(600, 80, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Direction %.0f", id(current_wind_direction).state);
-          it.printf(600, 80, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Dew Point %s°F", f0(id(dew_point).state).c_str());
-          it.printf(600, 110, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Precipitation %s in/hr", f2(id(precip_forecast).state).c_str());
-          it.printf(600, 140, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "%s%% Humidity", f0(id(cur_humidity).state).c_str());
-
-          std::string s = id(cur_forecast).state;
-
-          if (!s.empty() && s != "unknown" && s != "unavailable") {
-            int limit = 85;
-
-            // Chat GPT Forecast
-            it.printf(280, 200, id(font_mdi_medium), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map["bot"].c_str()); // happy bot icon
-
-            int space = 0;
-            int i = 0;
-            int line = 0;
-            int y = 220; // start Y
-
-            while(i<s.length()) //loop through string, counting all the spaces, and replacing the last one with ~ [marked by space variable] if the count exceeds limit of 35
-            {
-              if(s.substr(i,1) == " "){ space = i; }
-              if(line>limit-1){ s=s.substr(0,space)+"~"+s.substr(space+1);line = 0; }
-              i++;line++;
+          // word-wrap text into a box, at most max_lines lines
+          auto draw_wrapped = [&](const std::string &txt, int x, int y, int max_w, int line_h, int max_lines, font::Font *f) {
+            std::string line;
+            int n = 0;
+            size_t i = 0;
+            while (i <= txt.size() && n < max_lines) {
+              size_t sp = txt.find(' ', i);
+              if (sp == std::string::npos) sp = txt.size();
+              std::string word = txt.substr(i, sp - i);
+              std::string cand = line.empty() ? word : line + " " + word;
+              if (!line.empty() && text_w(cand, f) > max_w) {
+                it.print(x, y + n * line_h, f, COLOR_OFF, TextAlign::TOP_LEFT, line.c_str());
+                n++;
+                line = word;
+              } else {
+                line = cand;
+              }
+              i = sp + 1;
             }
-            size_t pos = s.find("~"); //find the first line break
+            if (n < max_lines && !line.empty())
+              it.print(x, y + n * line_h, f, COLOR_OFF, TextAlign::TOP_LEFT, line.c_str());
+          };
 
-            int linecount = 1; //need number of lines to store the break positions in an array
-            int breakpositions[10]; //store breakpositions [the '~']
-            breakpositions[0] = -1; // start at -1 cause we need to truncate the replaced characters and without this will cut off 1st character of message
-            while ( pos != std::string::npos && linecount < 9) //loop through  replacing the ~ with CR - though this doesnt matter here it will never be displayed, but need to change them to keep the loop from repeating at the start
-            {
-              s.replace(pos,1, "\n");
-              breakpositions[linecount] = pos; //store the position of the break in an array
-              pos = s.find("~"); // move forward
-              linecount++; // we have a new line, count it
+          // Which body pages have data right now. Keep in sync with the
+          // 10-minute rotation interval. Seasonal pages get added here.
+          const int NUM_PAGES = 2;
+          bool page_ok[NUM_PAGES] = {
+            true,                                                                      // 0: today (AI forecast + hourly)
+            id(d1_conditions).has_state() && !std::isnan(id(d1_temp_high).state),      // 1: 5-day
+          };
+          int page = id(page_idx);
+          if (page < 0 || page >= NUM_PAGES || !page_ok[page]) page = 0;
+
+          auto now = id(esptime).now();
+
+          // ===== header: right now + the day's outlook ==========================
+          std::string cond = id(cur_conditions).state;
+          it.printf(100, 82, id(font_mdi_header), COLOR_OFF, TextAlign::CENTER, "%s", icon[cond].c_str());
+          it.printf(100, 165, id(label), COLOR_OFF, TextAlign::TOP_CENTER, "%s", pretty(cond).c_str());
+          it.printf(205, 8, id(big), COLOR_OFF, TextAlign::TOP_LEFT, "%s°", f0(id(cur_temp).state).c_str());
+          it.printf(215, 145, id(label), COLOR_OFF, TextAlign::TOP_LEFT, "Feels like %s°", f0(id(cur_realfeel_temp).state).c_str());
+
+          // the day's outlook: today until 5 PM, then tomorrow
+          bool evening = now.is_valid() && now.hour >= 17;
+          text_sensor::TextSensor *o_cond = evening ? id(d1_conditions) : id(d0_conditions);
+          sensor::Sensor *o_hi  = evening ? id(d1_temp_high) : id(d0_temp_high);
+          sensor::Sensor *o_lo  = evening ? id(d1_temp_low)  : id(d0_temp_low);
+          sensor::Sensor *o_pop = evening ? id(d1_precip_prob) : id(d0_precip_prob);
+          const int ox = 495;
+          it.printf(ox, 14, id(small), COLOR_OFF, TextAlign::TOP_LEFT, "%s", evening ? "TOMORROW" : "TODAY");
+          std::string outlook = pretty(o_cond->state);
+          if (!std::isnan(o_pop->state))
+            outlook += (outlook.empty() ? "" : " · ") + f0(o_pop->state) + "% precip";
+          it.printf(ox, 56, id(label), COLOR_OFF, TextAlign::TOP_LEFT, "%s", outlook.c_str());
+          it.printf(ox, 92, id(label), COLOR_OFF, TextAlign::TOP_LEFT, "High %s° · Low %s°", f0(o_hi->state).c_str(), f0(o_lo->state).c_str());
+          it.printf(ox, 128, id(label), COLOR_OFF, TextAlign::TOP_LEFT, "Wind %s mph %s", f0(id(current_wind_speed).state).c_str(), id(current_wind_direction).state.c_str());
+
+          it.image(W - 30, 15, id(ss_logo_black), ImageAlign::TOP_RIGHT);
+          it.filled_rectangle(30, 200, W - 60, 2, COLOR_OFF);
+
+          // ===== body ===========================================================
+          if (page == 0) {
+            // Today: AI 8-hour forecast + the next five hours
+            std::string s = id(cur_forecast).state;
+            if (!s.empty() && s != "unknown" && s != "unavailable") {
+              it.printf(30, 220, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", icon["bot"].c_str());
+              draw_wrapped(s, 85, 224, W - 85 - 30, 32, 3, id(label));
             }
-
-            breakpositions[linecount] = s.length(); //set the last entry in array to the length of string for calculation below
-            std::string singleline; //this will be the line we print
-
-            i = 0;
-            while (i < linecount ) {  // count through the lines
-              singleline = s.substr(breakpositions[i]+1,(breakpositions[i+1]-breakpositions[i]-1)); //extract each line of text from the string - strip off the CRLF and the space.
-              it.printf(300, y, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "%s", singleline.c_str()); //print it!
-              y=y+30; // increment y to print properly on display
-              i++;
+            text_sensor::TextSensor *hours[5] = {id(h1_hour), id(h2_hour), id(h3_hour), id(h4_hour), id(h5_hour)};
+            text_sensor::TextSensor *conds[5] = {id(h1_conditions), id(h2_conditions), id(h3_conditions), id(h4_conditions), id(h5_conditions)};
+            sensor::Sensor *temps[5] = {id(h1_temp), id(h2_temp), id(h3_temp), id(h4_temp), id(h5_temp)};
+            for (int k = 0; k < 5; k++) {
+              int cx = 120 + 240 * k;
+              it.printf(cx, 360, id(small), COLOR_OFF, TextAlign::TOP_CENTER, "%s", hours[k]->state.c_str());
+              it.printf(cx, 395, id(font_mdi_large), COLOR_OFF, TextAlign::TOP_CENTER, "%s", icon[conds[k]->state].c_str());
+              it.printf(cx, 590, id(small), COLOR_OFF, TextAlign::TOP_CENTER, "%s°", f0(temps[k]->state).c_str());
+            }
+          } else if (page == 1) {
+            // 5-day forecast
+            static const char *DAYS[7] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+            text_sensor::TextSensor *dc[5] = {id(d0_conditions), id(d1_conditions), id(d2_conditions), id(d3_conditions), id(d4_conditions)};
+            sensor::Sensor *hi[5]  = {id(d0_temp_high), id(d1_temp_high), id(d2_temp_high), id(d3_temp_high), id(d4_temp_high)};
+            sensor::Sensor *lo[5]  = {id(d0_temp_low), id(d1_temp_low), id(d2_temp_low), id(d3_temp_low), id(d4_temp_low)};
+            sensor::Sensor *pop[5] = {id(d0_precip_prob), id(d1_precip_prob), id(d2_precip_prob), id(d3_precip_prob), id(d4_precip_prob)};
+            for (int k = 0; k < 5; k++) {
+              int cx = 120 + 240 * k;
+              std::string name = k == 0 ? std::string("Today")
+                               : (now.is_valid() ? std::string(DAYS[(now.day_of_week - 1 + k) % 7]) : str_sprintf("Day %d", k + 1));
+              it.printf(cx, 225, id(small), COLOR_OFF, TextAlign::TOP_CENTER, "%s", name.c_str());
+              it.printf(cx, 265, id(font_mdi_large), COLOR_OFF, TextAlign::TOP_CENTER, "%s", icon[dc[k]->state].c_str());
+              it.printf(cx, 465, id(medium), COLOR_OFF, TextAlign::TOP_CENTER, "%s°", f0(hi[k]->state).c_str());
+              it.printf(cx, 540, id(small), COLOR_OFF, TextAlign::TOP_CENTER, "low %s°", f0(lo[k]->state).c_str());
+              if (!std::isnan(pop[k]->state))
+                it.printf(cx, 585, id(label), COLOR_OFF, TextAlign::TOP_CENTER, "%s%% precip", f0(pop[k]->state).c_str());
             }
           }
 
-          // hourly
-          it.printf(120+(240*0), 320, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(h1_hour).state.c_str());
-          it.printf(120+(240*0), 340, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(h1_conditions).state.c_str()].c_str());
-          it.printf(120+(240*0), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s°F", f0(id(h1_temp).state).c_str());
+          // ===== footer: spa, page dots, date ===================================
+          it.filled_rectangle(30, 752, W - 60, 2, COLOR_OFF);
+          it.printf(30, 764, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", icon["hot-tub"].c_str());
+          std::string spa = "Spa " + f0(id(hottub_temp).state) + "°  set " + f0(id(hottub_setpoint).state) + "°";
+          it.printf(80, 769, id(small), COLOR_OFF, TextAlign::TOP_LEFT, "%s", spa.c_str());
+          int ix = 80 + text_w(spa, id(small)) + 18;
+          if (id(hottub_action).state == "heating") { it.printf(ix, 764, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", icon["heating"].c_str()); ix += 46; }
+          if (id(hottub_pump).state)     { it.printf(ix, 764, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", icon["waterfall"].c_str()); ix += 46; }
+          if (id(hottub_light).state)    { it.printf(ix, 764, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", icon["lightbulb"].c_str()); ix += 46; }
+          if (id(hottub_cleaning).state) { it.printf(ix, 764, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", icon["cleaning"].c_str()); ix += 46; }
 
-          it.printf(120+(240*1), 320, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(h2_hour).state.c_str());
-          it.printf(120+(240*1), 340, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(h2_conditions).state.c_str()].c_str());
-          it.printf(120+(240*1), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s°F", f0(id(h2_temp).state).c_str());
+          int n_ok = 0;
+          for (int p = 0; p < NUM_PAGES; p++) if (page_ok[p]) n_ok++;
+          if (n_ok > 1) {
+            int dx = W / 2 - (n_ok - 1) * 14, d = 0;
+            for (int p = 0; p < NUM_PAGES; p++) {
+              if (!page_ok[p]) continue;
+              if (p == page) it.filled_circle(dx + d * 28, 788, 7, COLOR_OFF);
+              else it.circle(dx + d * 28, 788, 7, COLOR_OFF);
+              d++;
+            }
+          }
 
-          it.printf(120+(240*2), 320, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(h3_hour).state.c_str());
-          it.printf(120+(240*2), 340, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(h3_conditions).state.c_str()].c_str());
-          it.printf(120+(240*2), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s°F", f0(id(h3_temp).state).c_str());
-
-          it.printf(120+(240*3), 320, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(h4_hour).state.c_str());
-          it.printf(120+(240*3), 340, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(h4_conditions).state.c_str()].c_str());
-          it.printf(120+(240*3), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s°F", f0(id(h4_temp).state).c_str());
-
-          it.printf(120+(240*4), 320, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(h5_hour).state.c_str());
-          it.printf(120+(240*4), 340, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(h5_conditions).state.c_str()].c_str());
-          it.printf(120+(240*4), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s°F", f0(id(h5_temp).state).c_str());
-
-
-          // hot tub telemetry
-          it.printf(450, 655, id(font_mdi_huge), COLOR_OFF, TextAlign::CENTER, "%s", weather_icon_map["hot-tub"].c_str()); // hot tub
-          it.printf(600, 555, id(medium), COLOR_OFF, TextAlign::TOP_LEFT, "Stargazer's Spa");
-          it.printf(600, 625, id(medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s°F", f0(id(hottub_temp).state).c_str());
-          it.printf(650, 680, id(small), COLOR_OFF, TextAlign::TOP_LEFT, "set to %s°F", f0(id(hottub_setpoint).state).c_str());
-
-          if (id(hottub_light).state)
-            it.printf(600, 720, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", weather_icon_map["lightbulb"].c_str()); // hot tub light
-
-          // detect ocpuancy
-          if ( !(id(hottub_light).state || (id(hottub_pump).state && !id(hottub_cleaning).state)) )
-            it.filled_rectangle(360, 574, 85, 80, COLOR_ON);
-
-          if (id(hottub_pump).state)
-            it.printf(640, 720, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", weather_icon_map["waterfall"].c_str()); // hot tub waterfall
-
-          if (id(hottub_action).state == "heating")
-            it.printf(680, 720, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", weather_icon_map["heating"].c_str()); // hot tub heating
-          else if (id(hottub_action).state == "cooling")
-            it.printf(680, 720, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", weather_icon_map["cooling"].c_str()); // hot tub cooling
-
-          if (id(hottub_cleaning).state)
-            it.printf(720, 720, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", weather_icon_map["cleaning"].c_str()); // hot tub light
-
-          //TODO
-
-          // Forecast Boxes
-          // it.rectangle(550,200,80,80, COLOR_OFF);
-          // it.rectangle(550,200,160,80, COLOR_OFF);
-          // it.rectangle(550,200,240,80, COLOR_OFF);
-          // it.rectangle(550,340,80,80, COLOR_OFF);
-          // it.rectangle(550,340,160,80, COLOR_OFF);
-          // it.rectangle(550,340,240,80, COLOR_OFF);
-
-          //Date, or an offline note if HA has been unreachable for 30+ minutes.
+          // date, or an offline note if HA has been unreachable for 30+ minutes
           // (no clock: a minute-by-minute timestamp forced a redraw every minute)
           bool api_ok = api::global_api_server != nullptr && api::global_api_server->is_connected();
           if (!api_ok && millis() - id(last_api_ok_ms) > 30UL * 60UL * 1000UL) {
             if (id(last_api_ok_str).empty())
-              it.printf(550, 790, id(tiny), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "offline");
+              it.printf(W - 70, 774, id(label), COLOR_OFF, TextAlign::TOP_RIGHT, "offline");
             else
-              it.printf(550, 790, id(tiny), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "offline since %s", id(last_api_ok_str).c_str());
-          } else {
-            auto now = id(esptime).now();
-            if (now.is_valid())
-              it.printf(550, 790, id(tiny), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s %d", now.strftime("%A, %B").c_str(), now.day_of_month);
+              it.printf(W - 70, 774, id(label), COLOR_OFF, TextAlign::TOP_RIGHT, "offline since %s", id(last_api_ok_str).c_str());
+          } else if (now.is_valid()) {
+            it.printf(W - 70, 774, id(label), COLOR_OFF, TextAlign::TOP_RIGHT, "%s %d", now.strftime("%A, %B").c_str(), now.day_of_month);
           }
-          //it.strftime(400, 30+500, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%I:%M:%S%p", id(esptime).now());
-          //it.strftime(400, 30+500, id(big), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%I:%M%p", id(esptime).now());
-
-          //Hourly Forecast
-          // it.printf(670,170, id(tiny), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "Hourly");
-          //it.printf(590,210,id(font_mdi_medium),COLOR_OFF, TextAlign::CENTER_HORIZONTAL,"%s",weather_icon_map[id(weather_h1).state.c_str()].c_str());
-          //it.printf(670,210,id(font_mdi_medium),COLOR_OFF, TextAlign::CENTER_HORIZONTAL,"%s",weather_icon_map[id(weather_h2).state.c_str()].c_str());
-          //it.printf(750,210,id(font_mdi_medium),COLOR_OFF, TextAlign::CENTER_HORIZONTAL,"%s",weather_icon_map[id(weather_h1).state.c_str()].c_str());
-          //it.printf(590,250,id(tiny),COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°", id(temp_h1).state);
-          //it.printf(670,250,id(tiny),COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°", id(temp_h2).state);
-          //it.printf(750,250,id(tiny),COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°", id(temp_h3).state);
-          //Daily Forecast
-          // it.printf(670,310, id(tiny), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "Daily");
-          //it.printf(590,350,id(font_mdi_medium), COLOR_OFF,TextAlign::CENTER_HORIZONTAL,"%s",weather_icon_map[id(weather_d1).state.c_str()].c_str());
-          //it.printf(670,350,id(font_mdi_medium), COLOR_OFF,TextAlign::CENTER_HORIZONTAL,"%s",weather_icon_map[id(weather_d2).state.c_str()].c_str());
-          //it.printf(750,350,id(font_mdi_medium), COLOR_OFF,TextAlign::CENTER_HORIZONTAL,"%s",weather_icon_map[id(weather_d1).state.c_str()].c_str());
-          //it.printf(590,390,id(tiny), COLOR_OFF,TextAlign::CENTER_HORIZONTAL, "%.0f°", id(temp_d1).state);
-          //it.printf(670,390,id(tiny), COLOR_OFF,TextAlign::CENTER_HORIZONTAL, "%.0f°", id(temp_d2).state);
-          //it.printf(750,390,id(tiny), COLOR_OFF,TextAlign::CENTER_HORIZONTAL, "%.0f°", id(temp_d3).state);
-          //Outdoor Data
-          //it.printf(20, 270, id(tiny),  COLOR_OFF,"Yard Temp: %.1f°", id(out_temp).state);
-          //it.printf(20, 300, id(tiny),  COLOR_OFF,"Humidity: %.1f%%", id(out_humidity).state);
-          //it.printf(20, 330, id(tiny),  COLOR_OFF,"Pressure: %.2f in", id(out_pressure).state);
-          //it.printf(20, 360, id(tiny),  COLOR_OFF,"Soil Moisture: %.0f%%", id(out_moisture).state);
-          //it.printf(20, 390, id(tiny),  COLOR_OFF,"Pot Moisture: %.0f%%", id(pot_moisture).state);
-          //Door Status
-          //it.printf(20, 170, id(tiny),"Front:");
-          //it.printf(100, 170, id(font_mdi_medium),"%s",door_map[id(front_door).state.c_str()].c_str());
-          //it.printf(20, 210, id(tiny),"Rear:");
-          //it.printf(100, 210, id(font_mdi_medium),"%s",door_map[id(back_door).state.c_str()].c_str());
-          //Temp Graph
-          //it.graph(250, 430, id(temp_graph));
-
-          // SS logo
-          //it.image(it.get_width()-40, 20, id(ss_logo_white), ImageAlign::TOP_RIGHT);
-          it.image(it.get_width()-40, 20, id(ss_logo_black), ImageAlign::TOP_RIGHT);
-
-          // connected status icon
-          if (id(system_status).state) {
-            it.printf(it.get_width()-40, 800, id(font_mdi_small), COLOR_OFF, TextAlign::BOTTOM_LEFT, "%s", weather_icon_map["connected"].c_str());
-          } else {
-            it.printf(it.get_width()-40, 800, id(font_mdi_small), COLOR_OFF, TextAlign::BOTTOM_LEFT, "%s", weather_icon_map["disconnected"].c_str());
-          }
+          if (id(system_status).state)
+            it.printf(W - 40, 800, id(font_mdi_small), COLOR_OFF, TextAlign::BOTTOM_LEFT, "%s", icon["connected"].c_str());
+          else
+            it.printf(W - 40, 800, id(font_mdi_small), COLOR_OFF, TextAlign::BOTTOM_LEFT, "%s", icon["disconnected"].c_str());
 
 #display_capture:
 #  display_id: inkplate_display
@@ -1095,6 +1133,22 @@ display:
 interval:
   - interval: 60s
     then:
+      - script.execute: mainLoop
+
+  # rotate the body to the next page that has data. Keep the eligibility
+  # checks in sync with page_ok[] in the weather_page1 lambda.
+  - interval: 10min
+    then:
+      - lambda: |-
+          const int NUM_PAGES = 2;
+          bool page_ok[NUM_PAGES] = {
+            true,
+            id(d1_conditions).has_state() && !std::isnan(id(d1_temp_high).state),
+          };
+          for (int step = 1; step <= NUM_PAGES; step++) {
+            int p = (id(page_idx) + step) % NUM_PAGES;
+            if (page_ok[p]) { id(page_idx) = p; break; }
+          }
       - script.execute: mainLoop
 
 remote_transmitter:

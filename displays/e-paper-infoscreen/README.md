@@ -50,6 +50,22 @@ device credentials as part of importing this repository.
   a full (flashing) refresh. For a quiet wall display, run it on USB power with
   `input_boolean.e_ink_sleepy_mode` off.
 
+## Screen layout (2026-11-19)
+
+- **Header (fixed):** current conditions icon and temperature, "feels like",
+  and the day's outlook — **Today** until 5 PM, then **Tomorrow** — with
+  conditions, chance of precipitation, high/low and wind. Logo on the right.
+- **Body (rotates every 10 minutes):** only through pages whose data is
+  available. Today = AI 8-hour forecast + next five hours; 5-day forecast.
+  Seasonal pages (ski, snowmobile, Santa's Village, hiking) will be added with
+  eligibility computed in Home Assistant.
+- **Footer (fixed):** spa temperature, setpoint and heating/pump/light/filter
+  icons, page dots, the date (or "offline since …").
+
+To add a page: bump `NUM_PAGES` and add its eligibility check in both the
+`weather_page1` lambda (`page_ok[]`) and the 10-minute rotation interval, then
+add its body block.
+
 ## Data sources (2026-11-19)
 
 - Current conditions: Weather Underground station `weather.knhlanca3` and its
