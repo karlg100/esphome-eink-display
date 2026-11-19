@@ -172,7 +172,18 @@ globals:
     restore_value: no
     initial_value: '0'
 
-# which body page is showing (0 = today, 1 = 5-day); advanced every 10 minutes
+# which set of six hikes the hiking page shows (advances each time it comes up)
+  - id: hike_set
+    type: int
+    restore_value: no
+    initial_value: '2'
+# last snow depth fetch attempt (retry every 10 min until one succeeds)
+  - id: snow_try_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+# which body page is showing (0 = today, 1 = 5-day, 2 = hikes); advanced every 10 minutes
   - id: page_idx
     type: int
     restore_value: no
@@ -300,6 +311,15 @@ sensor:
     id: sleep_seconds
     entity_id: sensor.e_ink_sleep_seconds
     internal: true
+
+  # snow on the ground at the house, inches (Open-Meteo model, fetched every 3 h)
+  - platform: template
+    id: snow_depth_in
+    name: "Snow depth at house"
+    unit_of_measurement: "in"
+    accuracy_decimals: 1
+    icon: mdi:snowflake
+    update_interval: never
 
   - platform: template
     name: "Wakeup Cause"
@@ -606,6 +626,27 @@ text_sensor:
                 value: 'true'
             - script.execute: mainLoop
 
+  # page override for testing (input_select.e_ink_page): auto = normal rotation,
+  # anything else pins that page even when it's out of season
+  - platform: homeassistant
+    id: page_override
+    entity_id: input_select.e_ink_page
+    internal: true
+    on_value:
+      - lambda: |-
+          int f = -1;
+          if (x == "today") f = 0; else if (x == "5-day") f = 1; else if (x == "hikes") f = 2;
+          if (f >= 0) {
+            id(page_idx) = f;
+            if (f == 2) id(hike_set) = (id(hike_set) + 1) % 3;
+          }
+          id(draw_now) = true;
+      - if:
+          condition:
+            lambda: 'return id(initial_draw_done);'
+          then:
+            - script.execute: mainLoop
+
   # awake / night / vacant, decided in HA (sensor.e_ink_power_mode)
   - platform: homeassistant
     id: power_mode
@@ -798,6 +839,12 @@ binary_sensor:
              id(cur_conditions).has_state() &&
              id(h1_hour).has_state();
 
+  # seasonal page eligibility. Hiking: no snow on the ground at the house
+  - platform: template
+    id: hikes_ok
+    name: "Show hiking page"
+    lambda: 'return id(snow_depth_in).has_state() && id(snow_depth_in).state < 1.0;'
+
   - platform: homeassistant
     id: hottub_pump
     entity_id: fan.stargazer_s_spa_pump_1
@@ -888,6 +935,13 @@ font:
   - file: "gfonts://Inter@700"
     id: tiny
     size: 20
+  # card titles on the seasonal pages (the smaller one for long names)
+  - file: "gfonts://Inter@900"
+    id: card_title
+    size: 24
+  - file: "gfonts://Inter@900"
+    id: card_title_sm
+    size: 20
   - file: "gfonts://Inter@700"
     id: label
     size: 26
@@ -938,6 +992,7 @@ font:
       - "\U000F1A45" # heating
       - "\U000F0717" # cooling
       - "\U000F0D43" # cooling
+      - "\U000F0D7F" # hiking
 
   - file: 'fonts/materialdesignicons-webfont.ttf'
     id: font_mdi_medium
@@ -975,6 +1030,19 @@ image:
 #    id: alert
 #    resize: 80x80
 
+
+# snow depth at the house (Open-Meteo) decides the snow-free pages (hiking)
+http_request:
+  timeout: 10s
+  verify_ssl: true
+
+# QR codes on the seasonal pages. qr_dyn is reused: set_value() then draw, one
+# card at a time (each QR object holds a ~4 KB buffer, so not one per trail).
+qr_code:
+  - id: qr_dyn
+    value: "https://www.alltrails.com"
+  - id: qr_hike_list
+    value: "https://www.alltrails.com/lists/micalea-and-karl-s-trail-list-352ce58?sh=b7ievg"
 
 ####
 # Display
@@ -1133,12 +1201,20 @@ display:
 
           // Which body pages have data right now. Keep in sync with the
           // 10-minute rotation interval. Seasonal pages get added here.
-          const int NUM_PAGES = 2;
+          const int NUM_PAGES = 3;
           bool page_ok[NUM_PAGES] = {
             true,                                                                      // 0: today (AI forecast + hourly)
             id(d1_conditions).has_state() && !std::isnan(id(d1_temp_high).state),      // 1: 5-day
+            id(hikes_ok).state,                                                        // 2: hikes (no snow)
           };
-          int page = id(page_idx);
+          // HA page override (input_select.e_ink_page) pins a page, in season or not
+          int forced = -1;
+          {
+            const std::string &o = id(page_override).state;
+            if (o == "today") forced = 0; else if (o == "5-day") forced = 1; else if (o == "hikes") forced = 2;
+          }
+          if (forced >= 0) page_ok[forced] = true;
+          int page = forced >= 0 ? forced : id(page_idx);
           if (page < 0 || page >= NUM_PAGES || !page_ok[page]) page = 0;
 
           auto now = id(esptime).now();
@@ -1203,6 +1279,69 @@ display:
               if (!std::isnan(pop[k]->state))
                 it.printf(cx, 585, id(label), COLOR_OFF, TextAlign::TOP_CENTER, "%s%% precip", f0(pop[k]->state).c_str());
             }
+          } else if (page == 2) {
+            // Hikes from our AllTrails list, nearest first by drive from the
+            // house; six per set, the next set each time this page comes up.
+            // Set 1 is the six highlights.
+            struct Hike { const char *name, *town, *drive, *dist, *route, *level, *url; };
+            static const Hike HIKES[17] = {
+              {"Prospect Mountain", "Lancaster", "7 min", "3.6 mi", "loop", "moderate", "https://www.alltrails.com/trail/us/new-hampshire/prospect-mountain-trail"},
+              {"Prospect Big Loop", "Lancaster", "7 min", "3.0 mi", "loop", "moderate", "https://www.alltrails.com/trail/us/new-hampshire/prospect-mountain-big-loop"},
+              {"Waumbek & Starr King", "Jefferson", "21 min", "7.0 mi", "out & back", "hard", "https://www.alltrails.com/trail/us/new-hampshire/mount-waumbek-and-mount-starr-king-trail"},
+              {"The Mooseway", "Jefferson", "23 min", "3.2 mi", "out & back", "easy", "https://www.alltrails.com/trail/us/new-hampshire/the-mooseway"},
+              {"Mud Pond", "Jefferson", "23 min", "1.1 mi", "out & back", "easy", "https://www.alltrails.com/trail/us/new-hampshire/mud-pond-trail"},
+              {"Gold Mine Trail", "Whitefield", "23 min", "1.8 mi", "out & back", "easy", "https://www.alltrails.com/trail/us/new-hampshire/gold-mine-trail"},
+              {"Colonel Whipple", "Jefferson", "24 min", "4.4 mi", "out & back", "easy", "https://www.alltrails.com/trail/us/new-hampshire/colonel-whipple-trail"},
+              {"Owl's Head / Martha's Mile", "Jefferson", "28 min", "6.2 mi", "out & back", "hard", "https://www.alltrails.com/trail/us/new-hampshire/owls-head-trail-to-marthas-mile"},
+              {"Pondicherry Refuge", "Whitefield", "29 min", "4.8 mi", "out & back", "easy", "https://www.alltrails.com/trail/us/new-hampshire/pondicherry-nature-refuge-via-presidential-range-rail-trail"},
+              {"Cow Mountain", "Granby, VT", "32 min", "3.2 mi", "out & back", "moderate", "https://www.alltrails.com/trail/us/vermont/cow-mountain-trail"},
+              {"Devil's Slide", "Groveton", "38 min", "1.7 mi", "out & back", "moderate", "https://www.alltrails.com/trail/us/new-hampshire/devils-slide-trail"},
+              {"Mount Willard", "Bretton Woods", "42 min", "3.2 mi", "out & back", "moderate", "https://www.alltrails.com/trail/us/new-hampshire/mount-willard"},
+              {"Mount Garfield", "Bethlehem", "42 min", "9.8 mi", "out & back", "hard", "https://www.alltrails.com/trail/us/new-hampshire/mount-garfield-trail"},
+              {"Victor Head", "Groveton", "44 min", "4.7 mi", "out & back", "moderate", "https://www.alltrails.com/trail/us/new-hampshire/victor-head"},
+              {"Bridesmaid Falls", "Franconia", "51 min", "1.0 mi", "out & back", "moderate", "https://www.alltrails.com/trail/us/new-hampshire/bridesmaid-falls"},
+              {"North Percy", "North Stratford", "51 min", "4.1 mi", "out & back", "hard", "https://www.alltrails.com/trail/us/new-hampshire/north-percy-trail"},
+              {"Table Rock", "Dixville Notch", "78 min", "1.5 mi", "out & back", "moderate", "https://www.alltrails.com/trail/us/new-hampshire/table-rock-dixville-notch"},
+            };
+            static const int SETS[3][6] = {{0, 2, 5, 3, 7, 8}, {1, 4, 6, 9, 10, 11}, {12, 13, 14, 15, 16, -1}};
+            int set = id(hike_set) % 3;
+            if (set < 0) set = 0;
+
+            it.print(30, 216, id(small), COLOR_OFF, TextAlign::TOP_LEFT, "HIKES NEAR THE HOUSE");
+            it.printf(1008, 222, id(label), COLOR_OFF, TextAlign::TOP_RIGHT, "nearest first · set %d of 3", set + 1);
+
+            for (int k = 0; k < 6; k++) {
+              int idx = SETS[set][k];
+              if (idx < 0) continue;
+              const Hike &h = HIKES[idx];
+              const int cw = 318, ch = 228;
+              int x = 30 + (k % 3) * (cw + 12), y = 262 + (k / 3) * (ch + 16);
+              it.rectangle(x, y, cw, ch, COLOR_OFF);
+              it.rectangle(x + 1, y + 1, cw - 2, ch - 2, COLOR_OFF);
+              font::Font *tf = text_w(h.name, id(card_title)) <= cw - 32 ? id(card_title) : id(card_title_sm);
+              it.print(x + 16, y + 14, tf, COLOR_OFF, TextAlign::TOP_LEFT, h.name);
+              it.print(x + 16, y + 48, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, h.town);
+              // drive time from the house, white on black
+              it.filled_rectangle(x + 16, y + 84, 112, 38, COLOR_OFF);
+              it.print(x + 72, y + 103, id(label), COLOR_ON, TextAlign::CENTER, h.drive);
+              it.print(x + 16, y + 140, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, h.dist);
+              it.print(x + 16, y + 164, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, h.route);
+              it.print(x + 16, y + 188, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, h.level);
+              id(qr_dyn).set_value(h.url);
+              it.qr_code(x + cw - 135, y + ch - 135, id(qr_dyn), COLOR_OFF, 3);
+            }
+
+            // the whole list
+            const int lx = 1020, lw = 150, ly = 262, lh = 472;
+            it.rectangle(lx, ly, lw, lh, COLOR_OFF);
+            it.rectangle(lx + 1, ly + 1, lw - 2, lh - 2, COLOR_OFF);
+            it.printf(lx + lw / 2, ly + 18, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_CENTER, "%s", "\U000F0D7F");
+            it.print(lx + lw / 2, ly + 72, id(label), COLOR_OFF, TextAlign::TOP_CENTER, "OUR LIST");
+            it.print(lx + lw / 2, ly + 108, id(tiny), COLOR_OFF, TextAlign::TOP_CENTER, "17 hikes");
+            it.print(lx + lw / 2, ly + 132, id(tiny), COLOR_OFF, TextAlign::TOP_CENTER, "we love");
+            it.qr_code(lx + 20, ly + 172, id(qr_hike_list), COLOR_OFF, 3);
+            it.print(lx + lw / 2, ly + 310, id(tiny), COLOR_OFF, TextAlign::TOP_CENTER, "Scan for");
+            it.print(lx + lw / 2, ly + 334, id(tiny), COLOR_OFF, TextAlign::TOP_CENTER, "all of them");
           }
 
           // ===== footer: spa, page dots, date ===================================
@@ -1281,6 +1420,14 @@ interval:
                 id: deep_sleep_1
                 sleep_duration: 30min
 
+  - interval: 3h
+    then:
+      - if:
+          condition:
+            wifi.connected:
+          then:
+            - script.execute: fetch_snow
+
   # rotate the body to the next page that has data every 10 minutes
   - interval: 10min
     then:
@@ -1309,17 +1456,58 @@ script:
   - id: next_page
     then:
       - lambda: |-
-          const int NUM_PAGES = 2;
+          const int NUM_PAGES = 3;
           bool page_ok[NUM_PAGES] = {
             true,
             id(d1_conditions).has_state() && !std::isnan(id(d1_temp_high).state),
+            id(hikes_ok).state,
           };
+          int forced = -1;
+          {
+            const std::string &o = id(page_override).state;
+            if (o == "today") forced = 0; else if (o == "5-day") forced = 1; else if (o == "hikes") forced = 2;
+          }
+          if (forced >= 0) {
+            // pinned from HA: stay on it, and step through its sets
+            id(page_idx) = forced;
+            if (forced == 2) id(hike_set) = (id(hike_set) + 1) % 3;
+            id(draw_now) = true;
+            return;
+          }
           for (int step = 1; step <= NUM_PAGES; step++) {
             int p = (id(page_idx) + step) % NUM_PAGES;
             if (page_ok[p]) { id(page_idx) = p; break; }
           }
+          // each visit to the hiking page shows the next six trails
+          if (id(page_idx) == 2) id(hike_set) = (id(hike_set) + 1) % 3;
           id(draw_now) = true;
       - script.execute: mainLoop
+
+  # snow depth at the house from Open-Meteo (meters -> inches)
+  - id: fetch_snow
+    mode: single
+    then:
+      - http_request.get:
+          url: "https://api.open-meteo.com/v1/forecast?latitude=44.4605&longitude=-71.5955&current=snow_depth"
+          capture_response: true
+          max_response_buffer_size: 2kB
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code != 200) {
+                    ESP_LOGW("snow", "Open-Meteo HTTP %d", response->status_code);
+                    return;
+                  }
+                  bool ok = json::parse_json(body, [](JsonObject root) -> bool {
+                    JsonVariant d = root["current"]["snow_depth"];
+                    if (d.isNull()) return false;
+                    id(snow_depth_in).publish_state(d.as<float>() * 39.37f);
+                    return true;
+                  });
+                  if (!ok) ESP_LOGW("snow", "no snow_depth in Open-Meteo response");
+          on_error:
+            then:
+              - logger.log: "snow depth fetch failed"
 
   # a press of the WAKE or frame button: flip the page and stay awake 10 minutes
   # (even at night or between guests - someone is standing in front of it)
@@ -1357,6 +1545,12 @@ script:
           if (!api_ok || millis() < id(awake_until_ms) || (m != "night" && m != "vacant"))
             m = "awake";
           id(eff_mode) = m;
+          // snow depth for the seasonal pages: fetch while awake until we have one
+          if (m == "awake" && api_ok && !id(snow_depth_in).has_state() &&
+              (id(snow_try_ms) == 0 || millis() - id(snow_try_ms) > 10UL * 60UL * 1000UL)) {
+            id(snow_try_ms) = millis();
+            id(fetch_snow).execute();
+          }
           id(sleep_after_draw) = m != "awake" && !std::isnan(id(sleep_seconds).state) &&
                                  id(sleep_seconds).state >= 60;
           if (id(sleep_after_draw)) {
