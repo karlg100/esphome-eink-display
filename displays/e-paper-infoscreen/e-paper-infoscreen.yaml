@@ -51,6 +51,10 @@ esp32:
     type: esp-idf
     advanced:
       minimum_chip_revision: "3.0"
+      # main loop task stack, 8 KB by default: the page lambdas plus the QR
+      # code generator (a ~4 KB temp buffer on the stack) overflowed it
+      # ("vApplicationStackOverflowHook" crash, then safe mode)
+      loop_task_stack_size: 16384
 
 external_components:
   # ESPHome's inkplate display driver (2026.10.2) plus saving the frame across
