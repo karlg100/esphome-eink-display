@@ -176,6 +176,8 @@ Body pages rotate every 10 minutes through the ones that are in season:
 | 1 | 5-day forecast | forecast loaded |
 | 2 | Hikes near the house | under 1 in of snow at the house |
 | 3 | Santa's Village | open later today or in the next 3 days |
+| 4 | Ski report (Bretton Woods, Cannon, Burke) | lifts open anywhere, or `input_datetime.ski_season_opening_day` within 3 days |
+| 5 | Snowmobiling | 6"+ of snow at the house, Dec 15 - Mar 31 |
 
 - **Hikes:** the 17 hikes on our AllTrails list (the paddling trail is left
   out), nearest first by drive time from the house, six per set. Each visit
@@ -223,3 +225,20 @@ are on the dev board but not used.)
   The vacant-mode wake is 6 h before an arrival so the frame is up for prep.
 - **Wiring:** IR LED driven by a transistor (e.g. 2N2222 / small N-MOSFET with a
   22-47 Ohm series resistor) from GPIO13. Duty 20% as on the dev board.
+
+### Ski report and snowmobiling (2026-11-19)
+
+- **Ski data** comes from HA Scrape helpers on each resort's own report page
+  (no API exists): `sensor.bretton_woods_trails` / `_lifts` / `_report_updated`
+  (`div.trail-reports__summary-item-count` 0 and 2), `sensor.cannon_trails_open`
+  / `_lifts_open` / `sensor.cannon_snowfall_to_date` (`div.font-swiss-outline`
+  2, 3, 1), `sensor.burke_trails` / `_lifts` / `sensor.burke_new_snow_24h`
+  (`div.uk-card-primary h1.uk-font-default` 1, 0). If a resort redesigns its
+  site, fix the selector in that Scrape helper.
+- **Opening day:** set `input_datetime.ski_season_opening_day` when the resorts
+  announce it; the page shows 3 days ahead and the date appears top right.
+- Drive times are OSRM estimates from the house (rural roads read slow).
+- No trail-map pages yet: they need the resort maps as images in `images/`.
+- **Snowmobiling:** snow depth (Open-Meteo), temperature, wind chill,
+  `sensor.sunset_time` (HA template), four rental outfitters, QR codes for NH
+  Fish & Game registration and rental agents, and NH State Parks trails.
