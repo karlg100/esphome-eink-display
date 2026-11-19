@@ -172,6 +172,24 @@ globals:
     restore_value: no
     initial_value: '0'
 
+# Santa's Village open days, YYYYMMDD + open hour + close hour (24 h).
+# 2026 Christmastime per santasvillage.com/park-info-tickets/dates-hours:
+# Saturdays Nov 7 - Dec 19 and Fri Nov 27 11-7, Sundays Nov 22 - Dec 20 11-6,
+# New Year's Eve 4-9. Update each fall; past dates are ignored.
+  - id: santa_days
+    type: std::vector<uint64_t>
+    restore_value: no
+    initial_value: >-
+      {202611071119ULL, 202611141119ULL, 202611211119ULL, 202611221118ULL,
+       202611271119ULL, 202611281119ULL, 202611291118ULL, 202612051119ULL,
+       202612061118ULL, 202612121119ULL, 202612131118ULL, 202612191119ULL,
+       202612201118ULL, 202612311621ULL}
+# Santa's Village is open today (still) or within the next 3 days
+  - id: santa_soon
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
 # which set of six hikes the hiking page shows (advances each time it comes up)
   - id: hike_set
     type: int
@@ -636,6 +654,7 @@ text_sensor:
       - lambda: |-
           int f = -1;
           if (x == "today") f = 0; else if (x == "5-day") f = 1; else if (x == "hikes") f = 2;
+          else if (x == "santa") f = 3;
           if (f >= 0) {
             id(page_idx) = f;
             if (f == 2) id(hike_set) = (id(hike_set) + 1) % 3;
@@ -1201,17 +1220,19 @@ display:
 
           // Which body pages have data right now. Keep in sync with the
           // 10-minute rotation interval. Seasonal pages get added here.
-          const int NUM_PAGES = 3;
+          const int NUM_PAGES = 4;
           bool page_ok[NUM_PAGES] = {
             true,                                                                      // 0: today (AI forecast + hourly)
             id(d1_conditions).has_state() && !std::isnan(id(d1_temp_high).state),      // 1: 5-day
             id(hikes_ok).state,                                                        // 2: hikes (no snow)
+            id(santa_soon),                                                            // 3: Santa's Village (open within 3 days)
           };
           // HA page override (input_select.e_ink_page) pins a page, in season or not
           int forced = -1;
           {
             const std::string &o = id(page_override).state;
             if (o == "today") forced = 0; else if (o == "5-day") forced = 1; else if (o == "hikes") forced = 2;
+            else if (o == "santa") forced = 3;
           }
           if (forced >= 0) page_ok[forced] = true;
           int page = forced >= 0 ? forced : id(page_idx);
@@ -1342,6 +1363,82 @@ display:
             it.qr_code(lx + 20, ly + 172, id(qr_hike_list), COLOR_OFF, 3);
             it.print(lx + lw / 2, ly + 310, id(tiny), COLOR_OFF, TextAlign::TOP_CENTER, "Scan for");
             it.print(lx + lw / 2, ly + 334, id(tiny), COLOR_OFF, TextAlign::TOP_CENTER, "all of them");
+          } else if (page == 3) {
+            // Santa's Village: the next open days from the season schedule
+            // (globals santa_days, YYYYMMDDHHhh = date, open hour, close hour)
+            static const char *DOW[7] = {"SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"};
+            static const char *DOW3[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+            static const char *MON[12] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
+            static const char *MON3[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+            auto hr = [](int h) -> std::string {
+              int h12 = h % 12 == 0 ? 12 : h % 12;
+              return str_sprintf("%d %s", h12, h < 12 ? "AM" : "PM");
+            };
+            struct Day { ESPTime t; int open, close; };
+            std::vector<Day> upcoming;
+            if (now.is_valid()) {
+              uint32_t today = now.year * 10000 + now.month * 100 + now.day_of_month;
+              for (uint64_t e : id(santa_days)) {
+                uint32_t date = e / 10000;
+                int open = (e / 100) % 100, close = e % 100;
+                if (date < today || (date == today && now.hour >= close)) continue;
+                ESPTime t{};
+                // find the weekday by walking from today (schedule is weeks, not years)
+                for (int d = 0; d < 60; d++) {
+                  ESPTime c = ESPTime::from_epoch_local(now.timestamp + d * 86400);
+                  if ((uint32_t) (c.year * 10000 + c.month * 100 + c.day_of_month) == date) { t = c; break; }
+                }
+                if (!t.is_valid()) continue;
+                upcoming.push_back({t, open, close});
+              }
+            }
+
+            it.print(30, 216, id(small), COLOR_OFF, TextAlign::TOP_LEFT, "SANTA'S VILLAGE");
+            it.print(1170, 222, id(label), COLOR_OFF, TextAlign::TOP_RIGHT, "Jefferson, NH");
+            it.printf(130, 270, id(font_mdi_large), COLOR_OFF, TextAlign::TOP_CENTER, "%s", "\U000F0405");
+            it.print(260, 272, id(small), COLOR_OFF, TextAlign::TOP_LEFT, "CHRISTMASTIME");
+            if (upcoming.empty()) {
+              it.print(260, 316, id(label), COLOR_OFF, TextAlign::TOP_LEFT, "Closed for the season");
+            } else {
+              const ESPTime &t0 = upcoming[0].t;
+              bool is_today = t0.day_of_month == now.day_of_month && t0.month == now.month;
+              ESPTime tom = ESPTime::from_epoch_local(now.timestamp + 86400);
+              bool is_tom = t0.day_of_month == tom.day_of_month && t0.month == tom.month;
+              std::string status = is_today ? "Open today" : is_tom ? "Open tomorrow" : std::string("Next open ") + DOW3[t0.day_of_week - 1];
+              it.print(260, 316, id(label), COLOR_OFF, TextAlign::TOP_LEFT, status.c_str());
+              // the next two open days: the first white on black
+              for (int k = 0; k < 2 && k < (int) upcoming.size(); k++) {
+                const Day &d = upcoming[k];
+                int y = 370 + k * 140;
+                Color fg = k == 0 ? COLOR_ON : COLOR_OFF;
+                if (k == 0) it.filled_rectangle(260, y, 540, 124, COLOR_OFF);
+                else { it.rectangle(260, y, 540, 124, COLOR_OFF); it.rectangle(261, y + 1, 538, 122, COLOR_OFF); }
+                it.printf(284, y + 14, id(small), fg, TextAlign::TOP_LEFT, "%s, %s %d", DOW[d.t.day_of_week - 1], MON[d.t.month - 1], d.t.day_of_month);
+                it.printf(284, y + 52, id(medium), fg, TextAlign::TOP_LEFT, "%s – %s", hr(d.open).c_str(), hr(d.close).c_str());
+              }
+              // then the rest, briefly
+              std::string more;
+              for (int k = 2; k < 5 && k < (int) upcoming.size(); k++) {
+                const ESPTime &t = upcoming[k].t;
+                if (!more.empty()) more += " · ";
+                more += str_sprintf("%s %s %d", DOW3[t.day_of_week - 1], MON3[t.month - 1], t.day_of_month);
+              }
+              if (!more.empty())
+                it.print(260, 660, id(label), COLOR_OFF, TextAlign::TOP_LEFT, ("Then: " + more).c_str());
+              const Day &last = upcoming.back();
+              it.printf(260, 698, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Season's last day: %s %s %d, %s – %s",
+                        DOW3[last.t.day_of_week - 1], MON3[last.t.month - 1], last.t.day_of_month,
+                        hr(last.open).c_str(), hr(last.close).c_str());
+            }
+            // QR codes: tickets (sold online by date) and the park calendar
+            id(qr_dyn).set_value("https://secure.interactiveticketing.com/1.43/faaba3/");
+            it.qr_code(850, 300, id(qr_dyn), COLOR_OFF, 4);
+            it.print(908, 448, id(label), COLOR_OFF, TextAlign::TOP_CENTER, "Tickets");
+            id(qr_dyn).set_value("https://www.santasvillage.com/park-info-tickets/dates-hours");
+            it.qr_code(1030, 300, id(qr_dyn), COLOR_OFF, 4);
+            it.print(1096, 448, id(label), COLOR_OFF, TextAlign::TOP_CENTER, "Hours");
+            it.print(1005, 520, id(tiny), COLOR_OFF, TextAlign::TOP_CENTER, "All-day $60, ages 4+");
+            it.print(1005, 546, id(tiny), COLOR_OFF, TextAlign::TOP_CENTER, "twilight tickets too");
           }
 
           // ===== footer: spa, page dots, date ===================================
@@ -1456,16 +1553,18 @@ script:
   - id: next_page
     then:
       - lambda: |-
-          const int NUM_PAGES = 3;
+          const int NUM_PAGES = 4;
           bool page_ok[NUM_PAGES] = {
             true,
             id(d1_conditions).has_state() && !std::isnan(id(d1_temp_high).state),
             id(hikes_ok).state,
+            id(santa_soon),
           };
           int forced = -1;
           {
             const std::string &o = id(page_override).state;
             if (o == "today") forced = 0; else if (o == "5-day") forced = 1; else if (o == "hikes") forced = 2;
+            else if (o == "santa") forced = 3;
           }
           if (forced >= 0) {
             // pinned from HA: stay on it, and step through its sets
@@ -1545,6 +1644,20 @@ script:
           if (!api_ok || millis() < id(awake_until_ms) || (m != "night" && m != "vacant"))
             m = "awake";
           id(eff_mode) = m;
+          // Santa's Village page: open later today, or in the next 3 days
+          {
+            bool soon = false;
+            auto now = id(esptime).now();
+            if (now.is_valid()) {
+              for (int d = 0; d <= 3 && !soon; d++) {
+                ESPTime c = ESPTime::from_epoch_local(now.timestamp + d * 86400);
+                uint64_t key = (uint64_t) c.year * 10000 + c.month * 100 + c.day_of_month;
+                for (uint64_t e : id(santa_days))
+                  if (e / 10000 == key && (d > 0 || now.hour < (int) (e % 100))) { soon = true; break; }
+              }
+            }
+            id(santa_soon) = soon;
+          }
           // snow depth for the seasonal pages: fetch while awake until we have one
           if (m == "awake" && api_ok && !id(snow_depth_in).has_state() &&
               (id(snow_try_ms) == 0 || millis() - id(snow_try_ms) > 10UL * 60UL * 1000UL)) {
