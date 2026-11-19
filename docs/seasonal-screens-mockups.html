@@ -36,9 +36,20 @@
   </section>
 
   <section>
-    <h2>Ski detail: one resort with its trail map</h2>
-    <p class="when">Rotates through open resorts. The map is a dithered 1-bit image stored on the device; open trails are listed beside it.</p>
-    <div class="frame"><svg class="screen" id="s-skidetail" viewBox="0 0 1200 825"></svg></div>
+    <h2>Ski detail: Bretton Woods</h2>
+    <p class="when">One detail screen per open resort, rotating after the ski report. The map box is where the resort's own trail map goes, resized and dithered to black and white; filled squares are open lifts.</p>
+    <div class="frame"><svg class="screen" id="s-map-bw" viewBox="0 0 1200 825"></svg></div>
+  </section>
+
+  <section>
+    <h2>Ski detail: Cannon</h2>
+    <div class="frame"><svg class="screen" id="s-map-cannon" viewBox="0 0 1200 825"></svg></div>
+  </section>
+
+  <section>
+    <h2>Ski detail: Burke</h2>
+    <div class="frame"><svg class="screen" id="s-map-burke" viewBox="0 0 1200 825"></svg></div>
+    <p class="src">Official maps: <a href="https://www.brettonwoods.com/content/uploads/2026/01/BW_AlpineTrailMap_2025-26.pdf">Bretton Woods 2025&ndash;26</a>, <a href="https://www.cannonmt.com/trail-map">Cannon</a>, <a href="https://skiburke.com/the-mountain/skiing-riding">Burke</a>. Lift names from each resort's site.</p>
   </section>
 
   <section>
@@ -57,7 +68,7 @@
 
   <section>
     <h2>Hiking</h2>
-    <p class="when">Shown any time there's no snow on the ground at the house. Trails come from your AllTrails list, nearest first, with drive time from the house; six at a time, rotating through all 17. One QR code per trail.</p>
+    <p class="when">Shown any time there's no snow on the ground at the house. Trails come from your AllTrails list, nearest first, with drive time from the house; six at a time in three sets, rotating through all 17. One QR code per trail, plus one for the whole list.</p>
     <div class="frame"><svg class="screen" id="s-hike" viewBox="0 0 1200 825"></svg></div>
   </section>
 </main>
@@ -135,7 +146,7 @@ function sectionTitle(text, right) {
 }
 
 function ski() {
-  let s = chrome(2, 5) + sectionTitle('SKI REPORT', 'updated 7:30 AM');
+  let s = chrome(2, 7) + sectionTitle('SKI REPORT', 'updated 7:30 AM');
   const R = [
     { n: 'Bretton Woods', d: '25 min', st: 'OPEN', h: '8:30 – 4:00', tr: '58/63', lf: '7/8', base: '22–36"', nw: '4"', px: 'from $89', qr: 'https://www.brettonwoods.com/snow-trail-report/' },
     { n: 'Cannon', d: '40 min', st: 'OPEN', h: '8:30 – 4:00', tr: '71/97', lf: '8/9', base: '18–30"', nw: '3"', px: 'from $79', qr: 'https://www.cannonmt.com/mountain-report' },
@@ -156,23 +167,46 @@ function ski() {
   return s;
 }
 
-function skiDetail() {
-  let s = chrome(3, 5) + sectionTitle('BRETTON WOODS TODAY', 'open 8:30 – 4:00');
-  s += `<rect x="30" y="262" width="640" height="478" fill="none" stroke="${INK}" stroke-width="3" stroke-dasharray="10 8"/>`;
-  s += icons.mountain(250, 380, 200);
-  s += T(350, 610, 'trail map image', 26, 700, 'middle');
-  s += T(350, 644, '(dithered 1-bit, supplied by you)', 22, 500, 'middle');
-  s += T(700, 270, 'LIFTS OPEN 7/8', 26, 900);
-  ['Skyway Gondola', 'Zephyr High Speed Quad', 'Bethlehem Express Quad II', 'West Mountain Express', 'Rosebrook Summit Express'].forEach((l, i) => s += T(700, 310 + i * 32, '• ' + l, 22, 500));
-  s += T(700, 486, 'TERRAIN OPEN', 26, 900);
-  [['Trails', '58/63'], ['Glades', '12/40'], ['Miles', '33/37'], ['New 24h', '4"']].forEach(([k, v], i) => { s += T(700, 526 + i * 32, k, 22, 500); s += T(1020, 526 + i * 32, v, 22, 900, 'end'); });
-  s += qr(1060, 600, 110, 'https://store.brettonwoods.com/s/tickets', 'Tickets');
-  s += T(700, 700, 'Snowmaking: yes  ·  Grooming: yes', 20, 500);
+const RESORTS = {
+  bw: { title: 'BRETTON WOODS TODAY', hours: 'open 8:30 – 4:00', page: 3,
+        lifts: [['Skyway Gondola', 1], ['Zephyr High Speed Quad', 1], ['Bethlehem Express Quad II', 1], ['Rosebrook Summit Express', 1], ['West Mountain Express', 1], ['Learning Center Quad', 1], ['Telegraph T-Bar', 0], ['Wonder Carpet', 1]],
+        terrain: [['Trails', '58/63'], ['Glades', '12/40'], ['New 24h', '4"']],
+        map: 'https://www.brettonwoods.com/content/uploads/2026/01/BW_AlpineTrailMap_2025-26.pdf', tix: 'https://store.brettonwoods.com/s/tickets' },
+  cannon: { title: 'CANNON TODAY', hours: 'open 8:30 – 4:00', page: 4,
+        lifts: [['Peabody Express Quad', 1], ['Cannonball Quad', 1], ['Tuckerbrook Quad', 1], ['Zoomer Triple', 1], ['Eagle Cliff Triple', 1], ['Brookside Triple', 1], ['Mittersill Double', 0], ['Valar T-Bar', 1], ['Huckerbrook Handle Tow', 1]],
+        terrain: [['Trails', '71/98'], ['Snowmaking', 'yes'], ['New 24h', '3"']],
+        map: 'https://www.cannonmt.com/trail-map', tix: 'https://www.cannonmt.com/mountain-report' },
+  burke: { title: 'BURKE TODAY', hours: 'open 9:00 – 4:00', page: 5,
+        lifts: [['Sherburne Express', 1], ['Mid Burke Express', 1], ['Magic Carpet', 1]],
+        terrain: [['Trails', '40/53'], ['Skiable acres', '210/260'], ['New 24h', '5"']],
+        map: 'https://skiburke.com/the-mountain/skiing-riding', tix: 'https://skiburke.com' }
+};
+
+function skiMap(key, name) {
+  const r = RESORTS[key];
+  let s = chrome(r.page, 7) + sectionTitle(r.title, r.hours);
+  s += `<rect x="30" y="262" width="660" height="478" fill="none" stroke="${INK}" stroke-width="3" stroke-dasharray="10 8"/>`;
+  s += icons.mountain(270, 360, 180);
+  s += T(360, 580, name + ' trail map', 28, 900, 'middle');
+  s += T(360, 618, 'resort image, resized to 660 × 478', 22, 500, 'middle');
+  s += T(360, 648, 'and dithered to black and white', 22, 500, 'middle');
+  const open = r.lifts.filter(l => l[1]).length;
+  s += T(716, 266, `LIFTS ${open}/${r.lifts.length}`, 26, 900);
+  const gap = r.lifts.length > 8 ? 29 : 32;
+  r.lifts.forEach(([n, o], i) => {
+    const y = 306 + i * gap;
+    s += o ? rect(718, y + 3, 16, 16) : `<rect x="719" y="${y + 4}" width="14" height="14" fill="none" stroke="${INK}" stroke-width="2"/>`;
+    s += T(744, y, n, 20, o ? 700 : 500, 'start', o ? '' : 'fill="#6b6a65"');
+  });
+  const ty = 316 + r.lifts.length * gap + 10;
+  r.terrain.forEach(([k, v], i) => { s += T(716, ty + i * 30, k, 20, 500); s += T(960, ty + i * 30, v, 20, 900, 'end'); });
+  s += qr(1045, 300, 115, r.map, 'Full map');
+  s += qr(1045, 470, 115, r.tix, key === 'bw' ? 'Tickets' : 'Report');
   return s;
 }
 
 function sled() {
-  let s = chrome(4, 5) + sectionTitle('SNOWMOBILING', 'trails reported open');
+  let s = chrome(6, 7) + sectionTitle('SNOWMOBILING', 'trails reported open');
   s += box(30, 262, 360, 478);
   s += icons.snow(110, 330, 46);
   s += T(170, 300, 'SNOW AT THE HOUSE', 17, 900);
@@ -213,33 +247,43 @@ function santa() {
 }
 
 function hike() {
-  let s = chrome(2, 3, 'nov') + sectionTitle('HIKES NEAR THE HOUSE', 'no snow on the ground');
+  let s = chrome(2, 3, 'nov') + sectionTitle('HIKES NEAR THE HOUSE', 'nearest first · set 1 of 3');
   const H = [
     { n: 'Prospect Mountain', w: 'Lancaster', drive: '7 min', st: '3.6 mi loop|moderate', url: 'https://www.alltrails.com/trail/us/new-hampshire/prospect-mountain-trail' },
     { n: 'Waumbek & Starr King', w: 'Jefferson', drive: '21 min', st: '7.0 mi out & back|challenging', url: 'https://www.alltrails.com/trail/us/new-hampshire/mount-waumbek-and-mount-starr-king-trail' },
     { n: 'Gold Mine Trail', w: 'Whitefield', drive: '23 min', st: '1.8 mi out & back|easy', url: 'https://www.alltrails.com/trail/us/new-hampshire/gold-mine-trail' },
     { n: 'The Mooseway', w: 'Jefferson', drive: '23 min', st: '3.2 mi out & back|easy', url: 'https://www.alltrails.com/trail/us/new-hampshire/the-mooseway' },
-    { n: "Owl's Head to Martha's Mile", w: 'Jefferson', drive: '28 min', st: '6.2 mi out & back|challenging', url: 'https://www.alltrails.com/trail/us/new-hampshire/owls-head-trail-to-marthas-mile' },
+    { n: "Owl's Head / Martha's Mile", w: 'Jefferson', drive: '28 min', st: '6.2 mi out & back|challenging', url: 'https://www.alltrails.com/trail/us/new-hampshire/owls-head-trail-to-marthas-mile' },
     { n: 'Pondicherry Refuge', w: 'Whitefield', drive: '29 min', st: '4.8 mi out & back|easy', url: 'https://www.alltrails.com/trail/us/new-hampshire/pondicherry-nature-refuge-via-presidential-range-rail-trail' }
   ];
   H.forEach((h, i) => {
     const col = i % 3, row = Math.floor(i / 3);
-    const x = 30 + col * 385, y = 262 + row * 244, w = 365, hgt = 228;
+    const w = 318, gap = 12, x = 30 + col * (w + gap), y = 262 + row * 244, hgt = 228;
     s += box(x, y, w, hgt);
-    s += icons.boot(x + 16, y + 16, 30);
-    s += T(x + 54, y + 18, h.n, h.n.length > 24 ? 19 : (h.n.length > 20 ? 22 : 26), 900);
-    s += T(x + 18, y + 64, h.w, 22, 700);
-    s += rect(x + 18, y + 100, 112, 38); s += T(x + 74, y + 107, h.drive, 22, 900, 'middle', 'fill="#ecebe5"');
-    s += T(x + 18, y + 156, h.st.split('|')[0], 20, 500);
-    s += T(x + 18, y + 184, h.st.split('|')[1], 20, 700);
-    s += qr(x + w - 112, y + hgt - 116, 100, h.url, '');
+    s += T(x + 16, y + 16, h.n, h.n.length > 20 ? 20 : 24, 900);
+    s += T(x + 16, y + 52, h.w, 20, 700);
+    s += rect(x + 16, y + 86, 104, 36); s += T(x + 68, y + 92, h.drive, 21, 900, 'middle', 'fill="#ecebe5"');
+    s += T(x + 16, y + 146, h.st.split('|')[0], 18, 500);
+    s += T(x + 16, y + 172, h.st.split('|')[1], 18, 700);
+    s += qr(x + w - 104, y + hgt - 108, 92, h.url, '');
   });
+  const lx = 30 + 3 * 330, lw = 1170 - lx;
+  s += box(lx, 262, lw, 472);
+  s += icons.boot(lx + lw / 2 - 18, 282, 36);
+  s += T(lx + lw / 2, 332, 'OUR LIST', 22, 900, 'middle');
+  s += T(lx + lw / 2, 362, '17 hikes', 18, 500, 'middle');
+  s += T(lx + lw / 2, 384, 'we love', 18, 500, 'middle');
+  s += qr(lx + 10, 430, lw - 20, 'https://www.alltrails.com/lists/micalea-and-karl-s-trail-list-352ce58?sh=b7ievg', '');
+  s += T(lx + lw / 2, lw + 440, 'Scan for', 16, 500, 'middle');
+  s += T(lx + lw / 2, lw + 460, 'all of them', 16, 500, 'middle');
   return s;
 }
 
 const draw = () => {
   document.getElementById('s-ski').innerHTML = ski();
-  document.getElementById('s-skidetail').innerHTML = skiDetail();
+  document.getElementById('s-map-bw').innerHTML = skiMap('bw', 'Bretton Woods');
+  document.getElementById('s-map-cannon').innerHTML = skiMap('cannon', 'Cannon');
+  document.getElementById('s-map-burke').innerHTML = skiMap('burke', 'Burke');
   document.getElementById('s-sled').innerHTML = sled();
   document.getElementById('s-santa').innerHTML = santa();
   document.getElementById('s-hike').innerHTML = hike();
