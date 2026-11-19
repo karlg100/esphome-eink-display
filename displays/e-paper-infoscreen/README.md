@@ -46,9 +46,9 @@ device credentials as part of importing this repository.
   every boot. One full refresh runs nightly at 3:00 to clear ghosting.
 - The footer shows the date, not a clock, so the page only changes when data
   does. If HA is unreachable for 30+ minutes the footer reads "offline since …".
-- Deep-sleep wakeups lose the framebuffer, so the first draw after each wake is
-  a full (flashing) refresh. For a quiet wall display, run it on USB power with
-  `input_boolean.e_ink_sleepy_mode` off.
+- Deep-sleep wakeups keep quiet partial updates: the driver saves its copy of
+  the panel image to flash before sleeping and restores it on wake (see
+  "Battery and deep sleep").
 
 ## Screen layout (2026-11-19)
 
@@ -109,3 +109,59 @@ ESPHome container. This was a compile-only test; no firmware was uploaded.
 Only the live `e-paper-infoscreen.yaml` is within the current remote write scope.
 Fonts and images were copied locally. Their live counterparts must not be changed. See the repository README for handling secret references and keeping
 other ESPHome projects untouched.
+
+## Battery and deep sleep (2026-11-19)
+
+Runs from a 10,000 mAh LiPo behind the frame. Home Assistant decides the power
+mode; the frame reads it on every pass of `mainLoop`.
+
+| Mode | When | Frame does |
+|---|---|---|
+| awake | daytime, or anyone around | slideshow as above, never sleeps |
+| night | 8 PM - 10 AM and every occupancy/motion sensor off | 5-day forecast, deep sleep 30 min, check again; any occupancy resumes the slideshow |
+| vacant | no stay for 1 h after checkout, until 3 h before the next arrival | welcome screen, deep sleep up to 6 h |
+
+HA helpers (UI template / derivative helpers):
+
+- `sensor.e_ink_power_mode`: awake / night / vacant. Uses
+  `sensor.mountainhouse_active_stay` (House Observer) for vacancy and the
+  ecobee occupancy sensors (main, upstairs, basement, garage) plus
+  `binary_sensor.house_motion` for night.
+- `sensor.e_ink_sleep_seconds`: 1800 at night; vacant sleeps until 3 h before
+  `next_arrival`, 10 min to 6 h per sleep.
+- `input_boolean.e_ink_stay_awake`: forces awake. **Turn it on before an OTA
+  update** (a sleeping frame can't be flashed) and wait up to 30 min.
+- `input_boolean.e_ink_sleep_mode`: forces vacant (hibernate).
+- Battery: `sensor.e_ink_battery_drain` (%/day over 12 h),
+  `sensor.e_ink_battery_days_left`, `binary_sensor.e_ink_battery_charging`.
+
+Frame side:
+
+- Before deep sleep the driver PackBits-compresses its copy of the panel image
+  (`buffer_`, 123,750 bytes 1-bit, usually a few KB compressed) into NVS; on a
+  deep-sleep wake it restores it, so redraws diff against what is really on the
+  glass. That is what the earlier `inkplatedisplay_sleep_buffer` experiment was
+  missing: PSRAM is powered down in deep sleep, so keeping the buffers allocated
+  did not keep their contents, and partial updates diffed against a blank
+  buffer. Code: `components/inkplate/frame_store.cpp` (external component, a
+  copy of ESPHome 2026.10.2's `inkplate` plus this file).
+- Night redraws are quiet partial updates; one full refresh on the 3 AM wake.
+- Woke from a timer but no HA for 3 minutes: sleeps again 30 min.
+- Battery % now averages 8 ADC samples per reading and caps at 100% instead of
+  dropping readings (it used to sit at "unknown" while charging).
+
+Buttons (both flip the page and wake the frame; a press keeps it awake 10 min):
+
+- Onboard WAKE button, GPIO36.
+- Frame button: momentary switch from **IO39** to **GND**. IO39 is shared with
+  the RTC interrupt line (jumper JP2, connected by default), which has the
+  board's pull-up and isn't used by this config. IO34-39 have no internal
+  pull-ups; if the "Frame button" entity flickers with nothing pressed, add a
+  10 kOhm pull-up from IO39 to 3.3 V. The frame button only arms as a wake
+  source when the line reads high, so a stuck line can't cause a wake loop.
+
+IR blaster: `remote_transmitter` on **GPIO13**. GPIO12 is a boot strapping pin
+(held high at power-on it stops the ESP32 booting). GPIO12-15 are the microSD
+slot's pins, so the SD card is not used. An IR LED needs a transistor driver
+(e.g. 2N2222 or an N-MOSFET with a 22-47 Ohm series resistor from 3.3-5 V);
+the GPIO alone gives very little range.
