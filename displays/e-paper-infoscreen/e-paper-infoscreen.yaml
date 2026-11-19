@@ -214,6 +214,10 @@ globals:
     restore_value: no
     initial_value: 'false'
 
+# reset reason / heap in HA, to see why the frame rebooted
+debug:
+  update_interval: 5min
+
 # Power: awake during the day; deep sleep at night once every occupancy sensor
 # is off (30 minute naps, forecast left on the screen) and between guests
 # (welcome screen, wake 3 hours before the next arrival). Home Assistant decides:
@@ -749,6 +753,10 @@ text_sensor:
     id: power_mode
     entity_id: sensor.e_ink_power_mode
     internal: true
+
+  - platform: debug
+    reset_reason:
+      name: "Reset reason"
 
 # log system state: running or deep sleep (and reason)
   - platform: template
@@ -1621,8 +1629,10 @@ remote_transmitter:
   pin: GPIO13
   # 20% as on the dev board where the codes were tested
   carrier_duty_percent: 20%
-  # blocking: back-to-back codes in a script go out one after another
-  non_blocking: false
+  # non-blocking (the default since 2025.11): a code still on the wire is
+  # finished before the next one starts. Blocking mode waits on the RMT driver
+  # in the main loop and the frame dropped off the network on the first send.
+  non_blocking: true
 #  pin:
 #    pca6416a: pca6416a_hub2
 #    number: 1
