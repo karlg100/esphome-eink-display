@@ -27,16 +27,28 @@ password references replace inline credentials from the live file; a commented
 fallback access-point password has also been replaced. Do not change the actual
 device credentials as part of importing this repository.
 
-## Known issues to investigate
+## Boot and loading behavior
 
-The initial Home Assistant state check found 44 distinct referenced entity IDs,
-11 absent from current states and four with `unknown` values. These are a point-in-time
-observation, not proof that the missing entities were deleted from the registry.
+- On a cold boot (power-on or reset) the welcome page (`ss_logo`) is drawn first.
+- The weather page is only drawn once `weather_data_ready` is true: current
+  temperature, first hourly temperature, hot tub temperature, current conditions
+  and the first hourly time label have all arrived from Home Assistant.
+  `on_boot` waits up to 120 s for that, then runs `mainLoop`.
+- Deep-sleep wakeups do not redraw the welcome page; the previous weather screen
+  stays up until fresh data is in.
+- Any number that is still missing renders as `--` instead of `nan`.
+- The `input_button.refresh_forecast` trigger runs `mainLoop`, but its first value
+  after connecting is ignored so it cannot draw a half-loaded page.
 
-The numeric `hottub_setpoint` sensor reads `hvac_action`; the intended target
-setpoint is the thermostat's `temperature` attribute. Daily condition entities,
-some former forecast entities, visibility, wind gusts, and the generated forecast
-also need review. These data issues have not been changed by disabling screenshot capture.
+## Data sources (2026-11-19)
+
+- Current conditions: Weather Underground station `weather.knhlanca3` and its
+  `sensor.knhlanca3_*` sensors (dew point replaces the old cloud ceiling line;
+  precipitation is the live rain rate).
+- Hot tub: `climate.stargazer_s_spa_thermostat_1` — `current_temperature` and the
+  `temperature` (target) attribute, which replaced the old `hvac_action` read
+  that always produced `nan`.
+- 8-hour text forecast: `sensor.chatgpt_forecast_8_hours`, `forecast` attribute.
 
 ## Verified build
 

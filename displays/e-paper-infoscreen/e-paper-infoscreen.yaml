@@ -1,12 +1,29 @@
-
 esphome:
   name: e-paper-infoscreen
   friendly_name: E-paper Infoscreen
 
   on_boot:
-    then:
-      # read the RTC time once when the system boots
-      pcf85063.read_time:
+    - then:
+        # read the RTC time once when the system boots
+        - pcf85063.read_time:
+    # once everything is set up: on a cold boot (power-on / reset, not a
+    # deep-sleep wakeup) show the welcome screen, then draw the weather as
+    # soon as the HA data has arrived instead of waiting for the 60s interval.
+    # Deep-sleep wakeups keep the last weather screen up until new data is in.
+    - priority: -100
+      then:
+        - if:
+            condition:
+              lambda: 'return esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED;'
+            then:
+              - logger.log: "e-ink display - cold boot, showing welcome screen"
+              - display.page.show: ss_logo
+              - component.update: inkplate_display
+        - wait_until:
+            condition:
+              binary_sensor.is_on: weather_data_ready
+            timeout: 120s
+        - script.execute: mainLoop
 
 esp32:
   board: esp-wrover-kit
@@ -14,7 +31,7 @@ esp32:
   cpu_frequency: 240MHz
   framework:
     type: esp-idf
-    advanced: 
+    advanced:
       minimum_chip_revision: "3.0"
 
 external_components:
@@ -82,6 +99,13 @@ time:
 #    id: esptime
 
 psram:
+
+# set once the first real screen has been drawn after boot
+globals:
+  - id: initial_draw_done
+    type: bool
+    restore_value: no
+    initial_value: 'false'
 
 deep_sleep:
 #  run_duration: alwasy
@@ -151,7 +175,7 @@ button:
     icon: mdi:sleep
     id: deepsleep_display
     on_press:
-      - logger.log: "e-ink display entering deep sleep"   
+      - logger.log: "e-ink display entering deep sleep"
       - deep_sleep.enter: deep_sleep_1
 
   - platform: template
@@ -234,7 +258,7 @@ sensor:
     update_interval: never
     accuracy_decimals: 0
     unit_of_measurement: "%"
-    icon: mdi:battery-medium    
+    icon: mdi:battery-medium
     entity_category: "diagnostic"
     device_class: "battery"
     filters:
@@ -324,7 +348,7 @@ sensor:
     id: current_wind_speed
     internal: true
     #restore_data: true
- 
+
   - platform: homeassistant
     entity_id: sensor.current_wind_bearing
     id: wind_bearing
@@ -332,7 +356,7 @@ sensor:
     #restore_data: true
 
   - platform: homeassistant
-    entity_id: sensor.mountain_house_forecast_precipitation
+    entity_id: sensor.knhlanca3_precipitation_rate
     id: precip_forecast
     internal: true
     #restore_data: true
@@ -351,7 +375,7 @@ sensor:
       // Check if all sensors have valid data to avoid 'NaN' errors
       if (id(cur_temp).has_state() && id(wind_chill).has_state() && id(heat_index).has_state()) {
         float temp = id(cur_temp).state;
-        
+
         // Logic: Use Wind Chill if cold, Heat Index if hot, otherwise Air Temp
         if (temp <= 50.0) {
           return id(wind_chill).state;
@@ -376,24 +400,12 @@ sensor:
     entity_id: sensor.forecast_day_1_temperature_low
 
   - platform: homeassistant
-    id: d0_realfeel_temp_high
-    entity_id: sensor.mountain_house_forecast_realfeel_temperature_max_day_0
-
-  - platform: homeassistant
-    id: d0_realfeel_temp_low
-    entity_id: sensor.mountain_house_forecast_realfeel_temperature_min_day_0
-
-  - platform: homeassistant
     id: d0_wind_speed
     entity_id: sensor.forecast_day_1_wind_speed
 
   - platform: homeassistant
-    id: d0_wind_gusts
-    entity_id: sensor.forecast_day_1_wind_gusts
-
-  - platform: homeassistant
-    id: cloud_ceiling
-    entity_id: sensor.mountain_house_forecast_cloud_ceiling
+    id: dew_point
+    entity_id: sensor.knhlanca3_dewpoint
 
 # hourly
   - platform: homeassistant
@@ -422,12 +434,28 @@ sensor:
     entity_id: climate.stargazer_s_spa_thermostat_1
     attribute: current_temperature
 
+  # target temperature (was reading hvac_action, which is text, so it was always nan)
   - platform: homeassistant
     id: hottub_setpoint
     entity_id: climate.stargazer_s_spa_thermostat_1
-    attribute: hvac_action
+    attribute: temperature
 
 text_sensor:
+# refresh the display when the HA "Refresh forecast" button is pressed.
+# HA also sends this sensor's current value right after connecting; that one is
+# ignored (initial_draw_done is still false) so it can't draw a half-loaded page.
+  - platform: homeassistant
+    id: refresh_forecast_button
+    entity_id: input_button.refresh_forecast
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(initial_draw_done);'
+          then:
+            - logger.log: "e-ink display - refresh button pressed"
+            - script.execute: mainLoop
+
 # log system state: running or deep sleep (and reason)
   - platform: template
     name: "DeepSleep State"
@@ -466,32 +494,33 @@ text_sensor:
 # weather
   - platform: homeassistant
     id: cur_conditions
-    entity_id: weather.mountain_house_forecast
+    entity_id: weather.knhlanca3
 
   - platform: homeassistant
     id: cur_forecast
     entity_id: sensor.chatgpt_forecast_8_hours
+    attribute: forecast
     #entity_id: sensor.mountain_house_forecast_condition_day_0
-   
+
   - platform: homeassistant
     id: d0_conditions
-    entity_id: sensor.forecast_d1_weather
+    entity_id: sensor.forecast_day_1_weather
 
   - platform: homeassistant
     id: d1_conditions
-    entity_id: sensor.forecast_d2_weather
+    entity_id: sensor.forecast_day_2_weather
 
   - platform: homeassistant
     id: d2_conditions
-    entity_id: sensor.forecast_d3_weather
+    entity_id: sensor.forecast_day_3_weather
 
   - platform: homeassistant
     id: d3_conditions
-    entity_id: sensor.forecast_d4_weather
+    entity_id: sensor.forecast_day_4_weather
 
   - platform: homeassistant
     id: d4_conditions
-    entity_id: sensor.forecast_d5_weather
+    entity_id: sensor.forecast_day_5_weather
 
   # Hourly conditions
   - platform: homeassistant
@@ -577,7 +606,7 @@ text_sensor:
       } else if (id(wind_bearing).state >= 326.25 && id(wind_bearing).state < 348.75) {
         return std::string("NNW");
       } else {
-        return std::string("Unknown");
+        return std::string("");
       }
 
 
@@ -601,6 +630,18 @@ binary_sensor:
 #      pca6416a: pca6416a_hub
 #      number: 12
 
+  # true once the key HA values have arrived, so the weather page is never
+  # drawn half-loaded (the "nan" screen right after boot)
+  - platform: template
+    id: weather_data_ready
+    internal: true
+    lambda: |-
+      return !std::isnan(id(cur_temp).state) &&
+             !std::isnan(id(h1_temp).state) &&
+             !std::isnan(id(hottub_temp).state) &&
+             id(cur_conditions).has_state() &&
+             id(h1_hour).has_state();
+
   - platform: homeassistant
     id: hottub_pump
     entity_id: fan.stargazer_s_spa_pump_1
@@ -611,7 +652,7 @@ binary_sensor:
 
   - platform: homeassistant
     id: hottub_cleaning
-    entity_id: binary_sensor.stargazer_s_spa_cleaning_mode
+    entity_id: binary_sensor.stargazer_s_spa_filtration
 
   - platform: homeassistant
     entity_id: input_boolean.sleep_mode
@@ -702,7 +743,7 @@ font:
       - "\U000F1A45" # heating
       - "\U000F0717" # cooling
       - "\U000F0D43" # cooling
-      
+
   - file: 'fonts/materialdesignicons-webfont.ttf'
     id: font_mdi_medium
     size: 40
@@ -782,19 +823,24 @@ display:
       pca6416a: pca6416a_hub
       number: 5
     pages:
-      - id: whitepage
-        lambda: |-
-          it.fill(COLOR_ON);
+      # welcome screen is first, so it's the default page if anything draws early
       - id: ss_logo
         lambda: |-
           it.fill(COLOR_ON);
           it.image(it.get_width()/2, it.get_height()/2, id(ss_logo_big_black), ImageAlign::CENTER);
           it.printf(it.get_width()/2, 100, id(medium), COLOR_OFF, TextAlign::CENTER, "Welcome to");
           //it.strftime(it.get_width()/2, 800, id(helvetica_48), COLOR_OFF, TextAlign::CENTER, "%A, %B %d %Y", id(esptime).now());
+      - id: whitepage
+        lambda: |-
+          it.fill(COLOR_ON);
       - id: weather_page1
         lambda: |-
           it.fill(COLOR_ON);
           //it.line(400, 0, 400, 600, COLOR_OFF);
+
+          // NaN-safe number formatting: show "--" for any value that hasn't loaded
+          auto f0 = [](float v) -> std::string { return std::isnan(v) ? std::string("--") : str_sprintf("%.0f", v); };
+          auto f2 = [](float v) -> std::string { return std::isnan(v) ? std::string("--") : str_sprintf("%.2f", v); };
 
           // Map weather states to MDI characters.
           std::map<std::string, std::string> weather_icon_map
@@ -810,7 +856,7 @@ display:
             {"lightning", "\U000F0593"},
             {"lightning-rainy", "\U000F067E"},
             {"clear-night", "\U000F0594"},
-            {"night-partly-cloudy", "U000F0F31"},
+            {"night-partly-cloudy", "\U000F0F31"},
             {"partlycloudy", "\U000F0595"},
             {"partly-lightning", "\U000F0F32"},
             {"partly-rainy", "\U000F0F33"},
@@ -838,10 +884,10 @@ display:
             {"waterfall", "\U000F1849"},
             {"heating", "\U000F1A45"},
             {"cooling", "\U000F0717"},
-            {"cleaning", "\U000F0D43"},           
+            {"cleaning", "\U000F0D43"},
           };
 
-          
+
 
           //Current Weather
           // Icon
@@ -849,22 +895,22 @@ display:
 
           // Text readout
           it.printf(145, 160+60, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(cur_conditions).state.c_str());
- 
+
           // current temp
-          it.printf(260, 20, id(big), COLOR_OFF, TextAlign::TOP_LEFT, "%.0f°F", id(cur_temp).state);
-          it.printf(260, 150, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Feels Like %.0f°F", id(cur_realfeel_temp).state);
+          it.printf(260, 20, id(big), COLOR_OFF, TextAlign::TOP_LEFT, "%s°F", f0(id(cur_temp).state).c_str());
+          it.printf(260, 150, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Feels Like %s°F", f0(id(cur_realfeel_temp).state).c_str());
 
           // Wind speed and direction
           // was 550 then 150,180
-          it.printf(600, 50, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Winds %.0f Mph %s", id(current_wind_speed).state, id(current_wind_direction).state.c_str());
+          it.printf(600, 50, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Winds %s Mph %s", f0(id(current_wind_speed).state).c_str(), id(current_wind_direction).state.c_str());
           //it.printf(600, 80, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Direction %.0f", id(current_wind_direction).state);
-          it.printf(600, 80, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Cloud Ceiling %.0f feet", id(cloud_ceiling).state);
-          it.printf(600, 110, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Preciptation %.2f in/hour", id(precip_forecast).state);
-          it.printf(600, 140, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "%.0f%% Humidity", id(cur_humidity).state);
+          it.printf(600, 80, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Dew Point %s°F", f0(id(dew_point).state).c_str());
+          it.printf(600, 110, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "Precipitation %s in/hr", f2(id(precip_forecast).state).c_str());
+          it.printf(600, 140, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "%s%% Humidity", f0(id(cur_humidity).state).c_str());
 
           std::string s = id(cur_forecast).state;
 
-          if (s != "unknown" && s != "unavailable") {
+          if (!s.empty() && s != "unknown" && s != "unavailable") {
             int limit = 85;
 
             // Chat GPT Forecast
@@ -886,7 +932,7 @@ display:
             int linecount = 1; //need number of lines to store the break positions in an array
             int breakpositions[10]; //store breakpositions [the '~']
             breakpositions[0] = -1; // start at -1 cause we need to truncate the replaced characters and without this will cut off 1st character of message
-            while ( pos != std::string::npos) //loop through  replacing the ~ with CR - though this doesnt matter here it will never be displayed, but need to change them to keep the loop from repeating at the start
+            while ( pos != std::string::npos && linecount < 9) //loop through  replacing the ~ with CR - though this doesnt matter here it will never be displayed, but need to change them to keep the loop from repeating at the start
             {
               s.replace(pos,1, "\n");
               breakpositions[linecount] = pos; //store the position of the break in an array
@@ -897,7 +943,7 @@ display:
             breakpositions[linecount] = s.length(); //set the last entry in array to the length of string for calculation below
             std::string singleline; //this will be the line we print
 
-            i = 0; 
+            i = 0;
             while (i < linecount ) {  // count through the lines
               singleline = s.substr(breakpositions[i]+1,(breakpositions[i+1]-breakpositions[i]-1)); //extract each line of text from the string - strip off the CRLF and the space.
               it.printf(300, y, id(tiny), COLOR_OFF, TextAlign::TOP_LEFT, "%s", singleline.c_str()); //print it!
@@ -909,30 +955,30 @@ display:
           // hourly
           it.printf(120+(240*0), 320, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(h1_hour).state.c_str());
           it.printf(120+(240*0), 340, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(h1_conditions).state.c_str()].c_str());
-          it.printf(120+(240*0), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°F", id(h1_temp).state);
+          it.printf(120+(240*0), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s°F", f0(id(h1_temp).state).c_str());
 
           it.printf(120+(240*1), 320, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(h2_hour).state.c_str());
           it.printf(120+(240*1), 340, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(h2_conditions).state.c_str()].c_str());
-          it.printf(120+(240*1), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°F", id(h2_temp).state);
+          it.printf(120+(240*1), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s°F", f0(id(h2_temp).state).c_str());
 
           it.printf(120+(240*2), 320, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(h3_hour).state.c_str());
           it.printf(120+(240*2), 340, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(h3_conditions).state.c_str()].c_str());
-          it.printf(120+(240*2), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°F", id(h3_temp).state);
+          it.printf(120+(240*2), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s°F", f0(id(h3_temp).state).c_str());
 
           it.printf(120+(240*3), 320, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(h4_hour).state.c_str());
           it.printf(120+(240*3), 340, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(h4_conditions).state.c_str()].c_str());
-          it.printf(120+(240*3), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°F", id(h4_temp).state);
+          it.printf(120+(240*3), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s°F", f0(id(h4_temp).state).c_str());
 
           it.printf(120+(240*4), 320, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", id(h5_hour).state.c_str());
           it.printf(120+(240*4), 340, id(font_mdi_large), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s", weather_icon_map[id(h5_conditions).state.c_str()].c_str());
-          it.printf(120+(240*4), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%.0f°F", id(h5_temp).state);
+          it.printf(120+(240*4), 520, id(small), COLOR_OFF, TextAlign::CENTER_HORIZONTAL, "%s°F", f0(id(h5_temp).state).c_str());
 
 
           // hot tub telemetry
           it.printf(450, 655, id(font_mdi_huge), COLOR_OFF, TextAlign::CENTER, "%s", weather_icon_map["hot-tub"].c_str()); // hot tub
           it.printf(600, 555, id(medium), COLOR_OFF, TextAlign::TOP_LEFT, "Stargazer's Spa");
-          it.printf(600, 625, id(medium), COLOR_OFF, TextAlign::TOP_LEFT, "%.0f°F", id(hottub_temp).state);
-          it.printf(650, 680, id(small), COLOR_OFF, TextAlign::TOP_LEFT, "%.0f°F", id(hottub_setpoint).state);
+          it.printf(600, 625, id(medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s°F", f0(id(hottub_temp).state).c_str());
+          it.printf(650, 680, id(small), COLOR_OFF, TextAlign::TOP_LEFT, "set to %s°F", f0(id(hottub_setpoint).state).c_str());
 
           if (id(hottub_light).state)
             it.printf(600, 720, id(font_mdi_medium), COLOR_OFF, TextAlign::TOP_LEFT, "%s", weather_icon_map["lightbulb"].c_str()); // hot tub light
@@ -995,8 +1041,8 @@ display:
           //it.printf(20, 210, id(tiny),"Rear:");
           //it.printf(100, 210, id(font_mdi_medium),"%s",door_map[id(back_door).state.c_str()].c_str());
           //Temp Graph
-          //it.graph(250, 430, id(temp_graph));   
-  
+          //it.graph(250, 430, id(temp_graph));
+
           // SS logo
           //it.image(it.get_width()-40, 20, id(ss_logo_white), ImageAlign::TOP_RIGHT);
           it.image(it.get_width()-40, 20, id(ss_logo_black), ImageAlign::TOP_RIGHT);
@@ -1056,6 +1102,13 @@ script:
             - logger.log: "e-ink display -  occuancy detected"
           else:
             - logger.log: "e-ink display -  occuancy not detected"
+      - if:
+          condition:
+            - binary_sensor.is_on: weather_data_ready
+          then:
+            - logger.log: "e-ink display -  weather data ready"
+          else:
+            - logger.log: "e-ink display -  weather data not loaded yet"
 
       # check if we should be in sleep mode (logo display and then check if we should be sleepy and sleep)
       - if:
@@ -1067,19 +1120,18 @@ script:
 #            - lambda: id(inkplate_display).set_partial_updating(false);
             - display.page.show: ss_logo
             - component.update: inkplate_display
-#            - component.update: inkplate_display
-#            - component.update: inkplate_display
-#            - component.update: inkplate_display
-#            - component.update: inkplate_display
-#            - component.update: inkplate_display
-#            - component.update: inkplate_display
+            - globals.set:
+                id: initial_draw_done
+                value: 'true'
 
-      # if we are not in sleep mode, check for API connetion and occupancy, then update if all true
+      # if we are not in sleep mode, check for API connection and that the data
+      # has loaded, then update if all true (otherwise the last screen stays up)
       - if:
           condition:
             - not:
               - binary_sensor.is_on: eink_sleep_mode
             - api.connected:
+            - binary_sensor.is_on: weather_data_ready
 #            - binary_sensor.is_on: secondfloor_occupied
           then:
             - logger.log: "e-ink display - showing weather page"
@@ -1088,12 +1140,9 @@ script:
 # KAG MOD            - lambda: id(inkplate_display).set_skip_reset(true);
             - display.page.show: weather_page1
             - component.update: inkplate_display
-#            - component.update: inkplate_display
-#            - component.update: inkplate_display
-#            - component.update: inkplate_display
-#            - component.update: inkplate_display
-#            - component.update: inkplate_display
-#            - component.update: inkplate_display
+            - globals.set:
+                id: initial_draw_done
+                value: 'true'
 
 # decide which sleep mode to go into
 # sleepy and occupied, short sleep
@@ -1136,61 +1185,61 @@ script:
 
   - id: marcycandle_on
     then:
-      - remote_transmitter.transmit_pronto: 
+      - remote_transmitter.transmit_pronto:
           data: "0000 006D 0022 0000 0161 00AC 0018 0014 0017 0014 0017 0014 0017 0015 0017 0014 0016 0015 0016 0015 0017 0014 0017 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 0015 0017 0015 0017 0015 0017 0015 0017 0015 0017 0015 0016 0016 0017 0015 0018 003E 0017 003F 0018 003E 0018 003E 0016 0040 0017 003F 0017 003F 0018 003E 0017 0181"
           repeat:
             times: 5
   - id: marcycandle_off
     then:
-      - remote_transmitter.transmit_pronto: 
+      - remote_transmitter.transmit_pronto:
           data: "0000 006D 0022 0000 0160 00AD 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0040 0016 0040 0016 0040 0016 0040 0016 0040 0016 0040 0016 0040 0015 0041 0016 0040 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0015 0017 0016 0016 0015 0041 0015 0041 0015 0041 0015 0041 0015 0041 0015 0041 0015 0041 0015 0181"
           repeat:
             times: 5
   - id: fireplace_power
     then:
-      - remote_transmitter.transmit_pronto: 
+      - remote_transmitter.transmit_pronto:
           data: "0000 006D 0022 0000 015B 00AE 0016 0041 0015 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0041 0015 0041 0015 0041 0015 0041 0015 0041 0015 0041 0015 0041 0015 0015 0016 0015 0016 0041 0015 0015 0016 0041 0015 0015 0016 0015 0016 0015 0016 0040 0017 003F 0017 0014 0018 003F 0018 0013 0018 003F 0019 003D 001A 003D 001C 0181"
           repeat:
             times: 5
   - id: fireplace_temp
     then:
-      - remote_transmitter.transmit_pronto: 
+      - remote_transmitter.transmit_pronto:
           data: "0000 006D 0022 0000 015B 00AE 0016 0041 0015 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0041 0015 0041 0015 0041 0015 0041 0015 0040 0016 0040 0016 0040 0016 0015 0016 0040 0016 0015 0017 0014 0016 0040 0015 0016 0018 0014 0018 0014 0018 003F 0018 0013 0019 003D 001B 003B 001B 0010 001B 003B 001C 003B 001B 003B 001B 0181"
           repeat:
             times: 5
   - id: fireplace_fire
     then:
-      - remote_transmitter.transmit_pronto: 
+      - remote_transmitter.transmit_pronto:
           data: "0000 006D 0022 0000 015B 00AE 0016 0041 0015 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0041 0015 0041 0015 0041 0015 0040 0016 0040 0016 0040 0016 0040 0015 0041 0018 0014 0016 0040 0016 0040 0016 0040 0016 0015 0018 0013 0018 0013 0019 0012 001B 003B 001C 000F 001A 0011 001B 0010 001C 003B 001B 003B 001B 003B 001B 0181"
           repeat:
             times: 5
   - id: fireplace_timer
     then:
-      - remote_transmitter.transmit_pronto: 
+      - remote_transmitter.transmit_pronto:
           data: "0000 006D 0022 0000 015B 00AD 0016 0041 0015 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0015 0016 0041 0015 0041 0015 0041 0015 0041 0015 0041 0017 0040 0017 0040 0018 003D 0019 0012 001B 0010 001B 003B 001B 003B 001B 0010 001B 0010 001B 0010 001B 0010 001A 003D 001A 003D 0019 0012 0019 0012 0019 003D 0019 003D 0018 003F 0017 0181"
           repeat:
             times: 5
   - id: fireplace_up
     then:
-      - remote_transmitter.transmit_pronto: 
+      - remote_transmitter.transmit_pronto:
           data: "0000 006D 0022 0000 015B 00AD 0018 0040 0015 0015 0016 0015 0018 0014 0019 0012 0017 0015 0019 0012 0018 0014 0018 0013 0018 003F 0017 0040 0017 003F 001A 003C 001B 003B 001A 003C 001B 003B 001B 0010 001B 003B 001A 0011 001A 003D 0019 003D 0019 0012 0019 0012 0019 0012 0019 003E 0017 0014 0017 003F 0017 0014 0017 0014 0017 003F 0017 003F 0017 003F 0017 0181"
           repeat:
             times: 5
   - id: fireplace_down
     then:
-      - remote_transmitter.transmit_pronto: 
+      - remote_transmitter.transmit_pronto:
           data: "0000 006D 0022 0000 015B 00AD 0016 0041 0015 0015 0016 0015 0017 0015 0018 0014 0016 0015 0018 0014 0018 0014 0018 0013 0018 003F 0019 003E 0019 003D 001B 003C 001B 003B 001B 003B 001D 003A 001B 003B 001B 0010 001B 003B 001A 0011 001B 0010 001A 0011 001B 0010 001B 0010 001B 0010 001B 003B 001A 0011 001B 003B 001A 003C 001A 003D 001A 003D 001A 003D 0019 0181"
           repeat:
             times: 5
   - id: tealights_on
     then:
-      - remote_transmitter.transmit_pronto: 
+      - remote_transmitter.transmit_pronto:
           data: "0000 006D 0022 0000 0163 00AC 0018 0015 0017 0016 0017 0016 0018 0015 0018 0015 0018 0015 001A 0014 001A 0014 001A 003D 001C 003B 001B 003B 001C 003B 001B 003B 001B 003B 001B 003B 001A 003D 001A 003D 001A 0013 001A 0013 001A 0013 001A 0014 001A 0014 0019 0014 0019 0014 0019 0014 0019 003E 0018 003F 0018 003F 0019 003E 0018 003F 0018 003F 0018 003F 0018 0181"
           repeat:
             times: 5
   - id: tealights_off
     then:
-      - remote_transmitter.transmit_pronto: 
+      - remote_transmitter.transmit_pronto:
           data: "0000 006D 0022 0000 0163 00AD 0018 0015 0018 0015 001A 0013 001A 0013 0019 0015 001C 0011 001C 0011 001C 0012 001C 003B 001C 003B 001C 003B 001C 003B 001C 003B 001C 003B 001C 003B 001C 003B 001C 003B 001C 0012 001B 0012 001B 003B 001B 0012 001C 0012 001B 0012 001A 0013 001A 0013 001B 003B 001B 003C 001A 0013 001A 003D 001A 003D 001A 003D 001A 003D 001A 0181"
           repeat:
             times: 5
