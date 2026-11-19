@@ -19,10 +19,28 @@ esphome:
               - logger.log: "e-ink display - cold boot, showing welcome screen"
               - display.page.show: ss_logo
               - component.update: inkplate_display
+        # woke from deep sleep with the last frame restored from flash: the
+        # panel already shows it, so the next draw can be a quiet partial update
+        - lambda: |-
+            if (id(inkplate_display).frame_restored())
+              id(initial_draw_done) = true;
+            auto cause = esp_sleep_get_wakeup_cause();
+            if (cause == ESP_SLEEP_WAKEUP_EXT0 || cause == ESP_SLEEP_WAKEUP_EXT1) {
+              // someone pressed the wake / frame button: stay up for a while and
+              // show the next page (today's forecast after the night screen)
+              id(awake_until_ms) = millis() + 10UL * 60UL * 1000UL;
+              id(page_idx) = 0;
+              id(draw_now) = true;
+            }
         - wait_until:
             condition:
               binary_sensor.is_on: weather_data_ready
             timeout: 120s
+        # the power mode comes from HA a moment after the API connects
+        - wait_until:
+            condition:
+              lambda: 'return id(power_mode).has_state();'
+            timeout: 20s
         - script.execute: mainLoop
 
 esp32:
@@ -35,6 +53,16 @@ esp32:
       minimum_chip_revision: "3.0"
 
 external_components:
+  # ESPHome's inkplate display driver (2026.10.2) plus saving the frame across
+  # deep sleep, so wakes can redraw with quiet partial updates. See
+  # displays/e-paper-infoscreen/components/inkplate/frame_store.cpp
+  - source:
+      type: git
+      url: https://github.com/karlg100/esphome-eink-display
+      ref: main
+      path: displays/e-paper-infoscreen/components
+    components: [inkplate]
+    refresh: 1h
 #  - source:
 #      type: git
 #      url: https://github.com/karlg100/esphome-display-screenshot
@@ -128,6 +156,22 @@ globals:
     restore_value: no
     initial_value: '""'
 
+# this mainLoop pass: awake / night / vacant, and whether to sleep after drawing
+  - id: eff_mode
+    type: std::string
+    restore_value: no
+    initial_value: '"awake"'
+  - id: sleep_after_draw
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+# a button press keeps the frame awake (no night / vacant sleep) until this time
+  - id: awake_until_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
 # which body page is showing (0 = today, 1 = 5-day); advanced every 10 minutes
   - id: page_idx
     type: int
@@ -141,11 +185,19 @@ globals:
     restore_value: no
     initial_value: 'false'
 
+# Power: awake during the day; deep sleep at night once every occupancy sensor
+# is off (30 minute naps, forecast left on the screen) and between guests
+# (welcome screen, wake 3 hours before the next arrival). Home Assistant decides:
+# sensor.e_ink_power_mode / sensor.e_ink_sleep_seconds (template helpers).
+# Turn on input_boolean.e_ink_stay_awake before an OTA update.
 deep_sleep:
-#  run_duration: alwasy
   id: deep_sleep_1
-  sleep_duration: 10s
-  wakeup_pin: GPIO36
+  sleep_duration: 30min
+  # onboard WAKE button (active low)
+  wakeup_pin:
+    number: GPIO36
+    inverted: true
+    allow_other_uses: true
   wakeup_pin_mode: INVERT_WAKEUP
 i2c:
 
@@ -243,6 +295,12 @@ sensor:
     entity_id: input_number.e_ink_refresh_count
     #restore_data: true
 
+  # how long to sleep in night / vacant mode (sensor.e_ink_sleep_seconds)
+  - platform: homeassistant
+    id: sleep_seconds
+    entity_id: sensor.e_ink_sleep_seconds
+    internal: true
+
   - platform: template
     name: "Wakeup Cause"
     accuracy_decimals: 0
@@ -284,11 +342,13 @@ sensor:
     unit_of_measurement: "V"
     accuracy_decimals: 3
     lambda: |-
+      // average a burst of samples so one reading is good enough on a short wake
       id(battery_read_mosfet).turn_on();
       delay(5);
-      float adc = id(battery_voltage_adc).sample();
+      float sum = 0;
+      for (int i = 0; i < 8; i++) sum += id(battery_voltage_adc).sample();
       id(battery_read_mosfet).turn_off();
-      return adc;
+      return sum / 8;
     update_interval: never
     #update_interval: 5sec
     filters:
@@ -320,16 +380,11 @@ sensor:
           - 4.08 -> 97.0
           - 4.11 -> 99.0
           - 4.20 -> 100.0
-      # cap at 100%
+      # cap at 0..100% (ignore_out_of_range dropped charging readings above
+      # 4.20 V, which left Battery % at "unknown")
       - clamp:
           min_value: 0
           max_value: 100
-          ignore_out_of_range: true
-      # remove outliers (both directions):
-      - median:
-          window_size: 7
-          send_every: 4
-          send_first_at: 3
 
   ####
   # Weather Data Sensors
@@ -551,6 +606,12 @@ text_sensor:
                 value: 'true'
             - script.execute: mainLoop
 
+  # awake / night / vacant, decided in HA (sensor.e_ink_power_mode)
+  - platform: homeassistant
+    id: power_mode
+    entity_id: sensor.e_ink_power_mode
+    internal: true
+
 # log system state: running or deep sleep (and reason)
   - platform: template
     name: "DeepSleep State"
@@ -749,21 +810,32 @@ binary_sensor:
     id: hottub_cleaning
     entity_id: binary_sensor.stargazer_s_spa_filtration
 
-  - platform: homeassistant
-    entity_id: input_boolean.sleep_mode
-    id: sleep_mode
-
-  - platform: homeassistant
-    entity_id: input_boolean.e_ink_sleep_mode
-    id: eink_sleep_mode
-
-  - platform: homeassistant
-    entity_id: input_boolean.e_ink_sleepy_mode
-    id: eink_sleepy_mode
-
-  - platform: homeassistant
-    entity_id: binary_sensor.mountain_house_occupancy
-    id: secondfloor_occupied
+  # page flip buttons: the onboard WAKE button, and a button on the frame wired
+  # from IO39 to GND (IO39 is shared with the RTC interrupt line, which has the
+  # board's pull-up and is unused here). Both also wake the frame from sleep.
+  - platform: gpio
+    id: wake_button
+    name: "Wake button"
+    pin:
+      number: GPIO36
+      inverted: true
+      allow_other_uses: true
+    filters:
+      - delayed_on: 20ms
+      - delayed_off: 20ms
+    on_press:
+      - script.execute: button_flip
+  - platform: gpio
+    id: frame_button
+    name: "Frame button"
+    pin:
+      number: GPIO39
+      inverted: true
+    filters:
+      - delayed_on: 20ms
+      - delayed_off: 20ms
+    on_press:
+      - script.execute: button_flip
 
   # main floor motion (the main thermostat's HomeKit motion sensor) - the floor
   # the frame hangs on. Someone walking in redraws right away, quietly.
@@ -1192,15 +1264,34 @@ interval:
   - interval: 60s
     then:
       - script.execute: mainLoop
+      # woke from a night / vacant sleep but HA is unreachable: don't burn the
+      # battery waiting, nap again (the screen keeps showing the last frame)
+      - if:
+          condition:
+            lambda: |-
+              return esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER &&
+                     millis() > 3UL * 60UL * 1000UL &&
+                     !(api::global_api_server != nullptr && api::global_api_server->is_connected());
+          then:
+            - logger.log: "e-ink display - no HA after waking, sleeping again"
+            - text_sensor.template.publish:
+                id: sleep_state
+                state: "Sleeping (no HA)"
+            - deep_sleep.enter:
+                id: deep_sleep_1
+                sleep_duration: 30min
 
   # rotate the body to the next page that has data every 10 minutes
   - interval: 10min
     then:
       - script.execute: next_page
 
+# IR blaster (LED candles, fireplace). GPIO13: GPIO12 is a boot strapping pin
+# (pulled high at power-on it stops the ESP32 booting). GPIO12-15 are the
+# microSD slot's pins, so the SD card is not used.
 remote_transmitter:
   carrier_duty_percent: 50%
-  pin: GPIO12
+  pin: GPIO13
 #  pin:
 #    pca6416a: pca6416a_hub2
 #    number: 1
@@ -1230,90 +1321,104 @@ script:
           id(draw_now) = true;
       - script.execute: mainLoop
 
+  # a press of the WAKE or frame button: flip the page and stay awake 10 minutes
+  # (even at night or between guests - someone is standing in front of it)
+  - id: button_flip
+    then:
+      - logger.log: "e-ink display - button pressed, next page"
+      - lambda: 'id(awake_until_ms) = millis() + 10UL * 60UL * 1000UL;'
+      - script.execute: next_page
+
+  # every minute while awake, and right after boot / wake: draw if needed, then
+  # deep sleep if HA says it is night (everyone in bed) or the house is vacant
   - id: mainLoop
     then:
-      - logger.log: "e-ink display - interval start"
       - lambda: |-
-          if (api::global_api_server != nullptr && api::global_api_server->is_connected()) {
+          bool api_ok = api::global_api_server != nullptr && api::global_api_server->is_connected();
+          if (api_ok) {
             id(last_api_ok_ms) = millis();
             auto t = id(esptime).now();
             if (t.is_valid())
               id(last_api_ok_str) = t.strftime("%a %I:%M %p");
           }
+          ESP_LOGD("main", "mode %s (sleep %.0fs), api %s, weather %s, main floor %s, button hold %s",
+                   id(power_mode).has_state() ? id(power_mode).state.c_str() : "?",
+                   id(sleep_seconds).state, api_ok ? "up" : "down",
+                   id(weather_data_ready).state ? "ready" : "not ready",
+                   id(main_floor_recent).state ? "active" : "quiet",
+                   millis() < id(awake_until_ms) ? "yes" : "no");
       - component.update: battery_voltage
-      - if:
-          condition:
-            - binary_sensor.is_on: eink_sleep_mode
-          then:
-            - logger.log: "e-ink display -  eink_sleep_mode on"
-          else:
-            - logger.log: "e-ink display -  eink_sleep_mode off"
-      - if:
-          condition:
-            - api.connected:
-          then:
-            - logger.log: "e-ink display -  api connected"
-          else:
-            - logger.log: "e-ink display -  api disconnected"
-      - if:
-          condition:
-            - binary_sensor.is_on: secondfloor_occupied
-          then:
-            - logger.log: "e-ink display -  occuancy detected"
-          else:
-            - logger.log: "e-ink display -  occuancy not detected"
-      - if:
-          condition:
-            - binary_sensor.is_on: weather_data_ready
-          then:
-            - logger.log: "e-ink display -  weather data ready"
-          else:
-            - logger.log: "e-ink display -  weather data not loaded yet"
 
-      # check if we should be in sleep mode (logo display and then check if we should be sleepy and sleep)
+      # what to do this pass: mode = awake / night / vacant. A recent button
+      # press keeps it awake. Sleeping needs HA connected (it decides).
+      - lambda: |-
+          bool api_ok = api::global_api_server != nullptr && api::global_api_server->is_connected();
+          std::string m = id(power_mode).has_state() ? id(power_mode).state : "awake";
+          if (!api_ok || millis() < id(awake_until_ms) || (m != "night" && m != "vacant"))
+            m = "awake";
+          id(eff_mode) = m;
+          id(sleep_after_draw) = m != "awake" && !std::isnan(id(sleep_seconds).state) &&
+                                 id(sleep_seconds).state >= 60;
+          if (id(sleep_after_draw)) {
+            id(draw_now) = true;
+            // night: the 5-day forecast (tomorrow's day is in the header)
+            if (m == "night" && id(d1_conditions).has_state() && !std::isnan(id(d1_temp_high).state))
+              id(page_idx) = 1;
+          }
+
+      # between guests: welcome screen
       - if:
           condition:
-            - binary_sensor.is_on: eink_sleep_mode
+            lambda: 'return id(eff_mode) == "vacant";'
           then:
-            - logger.log: "e-ink display - showing logo"
-# KAG mod            - lambda: id(inkplate_display).set_skip_reset(true);
-#            - lambda: id(inkplate_display).set_partial_updating(false);
+            - logger.log: "e-ink display - vacant, welcome screen"
+            - if:
+                condition:
+                  lambda: 'return !id(initial_draw_done) || !id(main_floor_recent).state;'
+                then:
+                  - lambda: id(inkplate_display).block_partial();
             - display.page.show: ss_logo
             - component.update: inkplate_display
             - globals.set:
                 id: initial_draw_done
                 value: 'true'
+            - globals.set:
+                id: draw_now
+                value: 'false'
 
-      # if we are not in sleep mode, check for API connection and that the data
-      # has loaded, then update if all true (otherwise the last screen stays up)
+      # weather: when HA data is in, and connected (or offline long enough that
+      # the page should say so). Redrawing an unchanged page is a no-op (partial
+      # update, no pixels change).
       - if:
           condition:
-            - not:
-              - binary_sensor.is_on: eink_sleep_mode
+            - lambda: 'return id(eff_mode) != "vacant";'
             - binary_sensor.is_on: weather_data_ready
-            # connected, or offline long enough that the page should say so.
-            # Redrawing an unchanged page is a no-op (partial update, no pixels change).
             - lambda: |-
                 return (api::global_api_server != nullptr && api::global_api_server->is_connected()) ||
                        millis() - id(last_api_ok_ms) > 30UL * 60UL * 1000UL;
             # someone on the main floor in the last hour, or a redraw was asked
-            # for (boot, page change, button, motion). Otherwise skip this minute.
+            # for (boot, page change, button, motion, going to sleep). Otherwise
+            # skip this minute.
             - lambda: 'return id(main_floor_recent).state || !id(initial_draw_done) || id(draw_now);'
-#            - binary_sensor.is_on: secondfloor_occupied
           then:
             - logger.log: "e-ink display - showing weather page"
             - component.update: current_wind_direction
-#            - if:
-# KAG MOD            - lambda: id(inkplate_display).set_skip_reset(true);
-            # full refresh for the first weather draw after boot (wipes the welcome
-            # screen without leaving a ghost) and whenever nobody has been on the
-            # main floor for an hour (no one sees the flash, and it clears
-            # ghosting); otherwise a quiet partial update
+            # Full refresh (clears ghosting) only when nobody will see the flash:
+            # - first draw after a cold boot (wipes the welcome screen)
+            # - awake: nobody on the main floor for an hour
+            # - night: once, on the 3am wake (night redraws are otherwise quiet
+            #   partial updates against the frame restored from flash)
             - if:
                 condition:
-                  lambda: 'return !id(initial_draw_done) || !id(main_floor_recent).state;'
+                  lambda: |-
+                    if (!id(initial_draw_done)) return true;
+                    if (id(eff_mode) == "night") {
+                      auto t = id(esptime).now();
+                      return t.is_valid() && t.hour == 3;
+                    }
+                    return !id(main_floor_recent).state;
                 then:
-                  - logger.log: "e-ink display - full refresh (first draw or main floor empty)"
+                  - logger.log: "e-ink display - full refresh"
                   - lambda: id(inkplate_display).block_partial();
             - display.page.show: weather_page1
             - component.update: inkplate_display
@@ -1324,44 +1429,31 @@ script:
                 id: draw_now
                 value: 'false'
 
-# decide which sleep mode to go into
-# sleepy and occupied, short sleep
       - if:
           condition:
-            - binary_sensor.is_on: eink_sleepy_mode
-            - binary_sensor.is_on: secondfloor_occupied
-            - not:
-              - binary_sensor.is_on: eink_sleep_mode
+            lambda: 'return id(sleep_after_draw);'
           then:
-            - logger.log: "e-ink display - deep sleeing for short time"
-            - deep_sleep.enter:
-                id: deep_sleep_1
-                sleep_duration: 300s
-# sleepy and unoccupied, but not hibernated, medium sleep
-      - if:
-          condition:
-            - binary_sensor.is_on: eink_sleepy_mode
-            - not:
-              - binary_sensor.is_on: eink_sleep_mode
-              - binary_sensor.is_on: secondfloor_occupied
-          then:
-            - logger.log: "e-ink display - deep sleeing for medium time"
-            - deep_sleep.enter:
-                id: deep_sleep_1
-                sleep_duration: 900s
-      - if:
-          condition:
-            - binary_sensor.is_on: eink_sleep_mode
-            - binary_sensor.is_on: eink_sleepy_mode
-          then:
-            - logger.log: "e-ink display - deep sleeing for long time"
-            - deep_sleep.enter:
-                id: deep_sleep_1
-                #sleep_duration: 300s
-                until: "16:00:00"
-                time_id: esptime
+            - script.execute: enter_sleep
 
-
+  # deep sleep for sensor.e_ink_sleep_seconds. The driver saves the frame to
+  # flash on the way down (frame_store.cpp). Wakes: timer, WAKE button (ext0),
+  # frame button (ext1, armed here unless the line is held low).
+  - id: enter_sleep
+    then:
+      - text_sensor.template.publish:
+          id: sleep_state
+          state: !lambda 'return id(eff_mode) == "night" ? std::string("Night sleep") : std::string("Vacant sleep");'
+      - lambda: |-
+          if (!id(frame_button).state)
+            esp_sleep_enable_ext1_wakeup(1ULL << 39, ESP_EXT1_WAKEUP_ALL_LOW);
+          ESP_LOGI("main", "deep sleep for %.0fs (%s)", id(sleep_seconds).state, id(eff_mode).c_str());
+      - deep_sleep.enter:
+          id: deep_sleep_1
+          sleep_duration: !lambda |-
+            float s = id(sleep_seconds).state;
+            if (std::isnan(s) || s < 60) s = 60;
+            if (s > 21600) s = 21600;
+            return (uint32_t) (s * 1000);
 
   - id: marcycandle_on
     then:
