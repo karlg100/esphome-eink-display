@@ -160,7 +160,7 @@ Buttons (both flip the page and wake the frame; a press keeps it awake 10 min):
   10 kOhm pull-up from IO39 to 3.3 V. The frame button only arms as a wake
   source when the line reads high, so a stuck line can't cause a wake loop.
 
-IR blaster: `remote_transmitter` on **GPIO13**. GPIO12 is a boot strapping pin
+IR blaster: `remote_transmitter` on **GPIO13** (see "IR: candles, tea lights, fireplace" below). GPIO12 is a boot strapping pin
 (held high at power-on it stops the ESP32 booting). GPIO12-15 are the microSD
 slot's pins, so the SD card is not used. An IR LED needs a transistor driver
 (e.g. 2N2222 or an N-MOSFET with a 22-47 Ohm series resistor from 3.3-5 V);
@@ -197,3 +197,28 @@ Body pages rotate every 10 minutes through the ones that are in season:
 - To add a page: bump `NUM_PAGES` and add its eligibility in both page tables
   (`weather_page1` lambda and the `next_page` script), the override names in
   both places plus the `page_override` text sensor, then its body block.
+
+## IR: candles, tea lights, fireplace (2026-11-19)
+
+The frame sends the IR codes captured and tested on the IR receiver/transmitter
+dev board (`candle-controller.yaml` in the mountain house builder): big candles
+on/off, Marcy's candle on/off, tea lights on/off, LED fireplace power (a toggle).
+
+- **Buttons** on the frame device in HA: one per code, plus "IR All candles
+  on/off" and "IR Everything on".
+- **The fireplace** is on the "Fake fireplace" smart plug
+  (`switch.tp_link_smart_plug_161d_plug_1`). Power-cycling the plug leaves it
+  off, so "on" = cycle the plug, then IR power; "off" = cycle the plug.
+- **HA scripts** `script.ambiance_on` / `script.ambiance_off` do the plug cycle
+  and then leave a request in `input_select.e_ink_ir_request` (on/off). The
+  frame sends the codes when it's awake (HA keeps it awake while a request
+  waits, and it picks the request up on wake), reports through the "IR last
+  sent" sensor, and the script sets the request back to `none` (up to 7 h).
+  HA can't just wait for the frame to come online: entities of deep-sleep
+  devices keep their last state while asleep.
+- **Automations:** "Prep for Occupancy : Ambiance on" (when
+  `scene.prep_for_occupancy` is activated, about 5 h before check-in) and
+  "Sleep House : Ambiance off" (when `scene.sleep_house` is activated).
+  The vacant-mode wake is 6 h before an arrival so the frame is up for prep.
+- **Wiring:** IR LED driven by a transistor (e.g. 2N2222 / small N-MOSFET with a
+  22-47 Ohm series resistor) from GPIO13. Duty 20% as on the dev board.
