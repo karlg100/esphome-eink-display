@@ -1203,10 +1203,13 @@ font:
     glyphs: *mdi-weather-glyphs
 
 image:
-  - platform: file
-    file: "images/ss-white-cropped.png"
-    id: ss_logo_white
-    type: GRAYSCALE
+  # (ss-white-cropped.png, white logo for a dark background, isn't drawn
+  # anywhere; left out to save ~50 KB of flash - the OTA slot on the frame is
+  # 1.75 MB)
+#  - platform: file
+#    file: "images/ss-white-cropped.png"
+#    id: ss_logo_white
+#    type: GRAYSCALE
 #    transparency: alpha_channel
 #    resize: 400x400
   - platform: file
