@@ -57,7 +57,7 @@
 
   <section>
     <h2>Hiking</h2>
-    <p class="when">Shown May&ndash;Oct when there's no snow on the ground. Trail list is curated in Home Assistant; one QR code per trail.</p>
+    <p class="when">Shown any time there's no snow on the ground at the house. Trails come from your AllTrails list, nearest first, with drive time from the house; six at a time, rotating through all 17. One QR code per trail.</p>
     <div class="frame"><svg class="screen" id="s-hike" viewBox="0 0 1200 825"></svg></div>
   </section>
 </main>
@@ -213,29 +213,27 @@ function santa() {
 }
 
 function hike() {
-  let s = chrome(2, 3, 'summer') + sectionTitle('HIKES NEAR THE HOUSE', 'trail of the day: Mt Prospect');
+  let s = chrome(2, 3, 'nov') + sectionTitle('HIKES NEAR THE HOUSE', 'no snow on the ground');
   const H = [
-    { n: 'Mt Prospect', w: 'Weeks State Park, Lancaster', d: 'fire tower, summit views', url: 'https://hikenewengland.com/Prospect021116.php' },
-    { n: 'Cherry Mountain', w: "Owl's Head, Jefferson", d: 'ledges over the Presidentials', url: '' },
-    { n: 'Pondicherry Refuge', w: 'Jefferson / Whitefield', d: 'flat, ponds and birding', url: '' },
-    { n: 'Mt Starr King', w: 'Jefferson', d: 'steady climb, summit chimney', url: '' },
-    { n: 'Mt Cabot', w: 'Kilkenny, Lancaster', d: '4,000-footer, fire cabin', url: '' }
+    { n: 'Prospect Mountain', w: 'Lancaster', drive: '7 min', st: '3.6 mi loop|moderate', url: 'https://www.alltrails.com/trail/us/new-hampshire/prospect-mountain-trail' },
+    { n: 'Waumbek & Starr King', w: 'Jefferson', drive: '21 min', st: '7.0 mi out & back|challenging', url: 'https://www.alltrails.com/trail/us/new-hampshire/mount-waumbek-and-mount-starr-king-trail' },
+    { n: 'Gold Mine Trail', w: 'Whitefield', drive: '23 min', st: '1.8 mi out & back|easy', url: 'https://www.alltrails.com/trail/us/new-hampshire/gold-mine-trail' },
+    { n: 'The Mooseway', w: 'Jefferson', drive: '23 min', st: '3.2 mi out & back|easy', url: 'https://www.alltrails.com/trail/us/new-hampshire/the-mooseway' },
+    { n: "Owl's Head to Martha's Mile", w: 'Jefferson', drive: '28 min', st: '6.2 mi out & back|challenging', url: 'https://www.alltrails.com/trail/us/new-hampshire/owls-head-trail-to-marthas-mile' },
+    { n: 'Pondicherry Refuge', w: 'Whitefield', drive: '29 min', st: '4.8 mi out & back|easy', url: 'https://www.alltrails.com/trail/us/new-hampshire/pondicherry-nature-refuge-via-presidential-range-rail-trail' }
   ];
   H.forEach((h, i) => {
-    const col = i < 3 ? i : i - 3, row = i < 3 ? 0 : 1;
-    const x = row === 0 ? 30 + col * 385 : 222 + col * 385, y = row === 0 ? 262 : 506, w = 365, hgt = 228;
+    const col = i % 3, row = Math.floor(i / 3);
+    const x = 30 + col * 385, y = 262 + row * 244, w = 365, hgt = 228;
     s += box(x, y, w, hgt);
-    s += icons.boot(x + 18, y + 18, 34);
-    s += T(x + 62, y + 20, h.n, 28, 900);
-    s += T(x + 18, y + 66, h.w, 20, 700);
-    s += T(x + 18, y + 96, h.d, 20, 500);
-    s += T(x + 18, y + 130, 'distance · gain · time', 18, 500, 'start', 'fill="#6b6a65"');
-    s += qr(x + w - 100, y + hgt - 104, 88, h.url, '');
+    s += icons.boot(x + 16, y + 16, 30);
+    s += T(x + 54, y + 18, h.n, h.n.length > 24 ? 19 : (h.n.length > 20 ? 22 : 26), 900);
+    s += T(x + 18, y + 64, h.w, 22, 700);
+    s += rect(x + 18, y + 100, 112, 38); s += T(x + 74, y + 107, h.drive, 22, 900, 'middle', 'fill="#ecebe5"');
+    s += T(x + 18, y + 156, h.st.split('|')[0], 20, 500);
+    s += T(x + 18, y + 184, h.st.split('|')[1], 20, 700);
+    s += qr(x + w - 112, y + hgt - 116, 100, h.url, '');
   });
-  s += T(1060, 556, 'hikeSafe:', 22, 900, 'middle');
-  s += T(1060, 586, 'tell someone your', 18, 500, 'middle');
-  s += T(1060, 610, 'route and be back', 18, 500, 'middle');
-  s += T(1060, 634, 'before dark', 18, 500, 'middle');
   return s;
 }
 
