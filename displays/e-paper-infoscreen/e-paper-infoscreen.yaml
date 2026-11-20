@@ -45,7 +45,9 @@ esphome:
 
 esp32:
   board: esp-wrover-kit
-  flash_size: 16MB
+  # the Inkplate 10's WROVER-E has 4 MB of flash (a 16 MB build header stops
+  # the new bootloader: "Detected size(4096k) smaller than ... header(16384k)")
+  flash_size: 4MB
   cpu_frequency: 240MHz
   framework:
     type: esp-idf
@@ -67,7 +69,8 @@ external_components:
       path: displays/e-paper-infoscreen/components
     # web_image: trail maps and resort logos, downloaded once per builder and
     # dithered at compile time (displays/e-paper-infoscreen/components/web_image)
-    components: [inkplate, web_image]
+    # flash_layout: our partition table (components/flash_layout/partitions_4mb.csv)
+    components: [inkplate, web_image, flash_layout]
     refresh: always
 #  - source:
 #      type: git
@@ -81,6 +84,9 @@ external_components:
 #  - source: github://karlg100/esphome@inkplatedisplay_sleep_buffer
 #    components: [ inkplate6 ]
 #    refresh: always
+
+# two 1.875 MB OTA slots + 192 KB NVS on the 4 MB flash (applies on a USB flash)
+flash_layout:
 
 logger:
 #  level: VERBOSE

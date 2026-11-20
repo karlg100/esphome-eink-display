@@ -1,0 +1,9 @@
+# Inkplate 10 (ESP32-WROVER-E, 4 MB flash): two 1.875 MB OTA slots and a
+# 192 KB NVS (preferences + the frame saved across deep sleep, ~30-50 KB).
+# ESPHome's default for 4 MB is 1.75 MB slots with a 448 KB NVS.
+# Name,   Type, SubType, Offset,   Size
+otadata,  data, ota,     0x9000,   0x2000
+phy_init, data, phy,     0xB000,   0x1000
+app0,     app,  ota_0,   0x10000,  0x1E0000
+app1,     app,  ota_1,   0x1F0000, 0x1E0000
+nvs,      data, nvs,     0x3D0000, 0x30000

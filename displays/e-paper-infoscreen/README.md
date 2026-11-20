@@ -258,3 +258,12 @@ are on the dev board but not used.)
 - **Snowmobiling:** snow depth (Open-Meteo), temperature, wind chill,
   `sensor.sunset_time` (HA template), four rental outfitters, QR codes for NH
   Fish & Game registration and rental agents, and NH State Parks trails.
+
+## Flash layout (2026-11-20)
+
+The Inkplate 10's ESP32-WROVER-E has **4 MB** of flash. `flash_layout`
+(`components/flash_layout/partitions_4mb.csv`) gives two 1.875 MB OTA slots
+and a 192 KB NVS, instead of ESPHome's default 1.75 MB slots. A partition
+table (and the bootloader) only change with a USB flash: build, download the
+factory image from the ESPHome builder and install it with ESPHome Web
+(web.esphome.io) in Chrome.
