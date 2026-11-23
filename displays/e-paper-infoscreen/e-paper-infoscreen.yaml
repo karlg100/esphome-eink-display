@@ -242,12 +242,17 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'false'
-# set by next_page: draw the new page with a full (flashing) refresh. Partial
-# updates from page to page left heavy ghosting, worst after the dithered maps.
+# set by next_page when the last full (flashing) refresh is over an hour old:
+# the new page gets one, so ghosting from partial page changes can't build up
+# for more than an hour even while people are around
   - id: full_next
     type: bool
     restore_value: no
     initial_value: 'false'
+  - id: last_full_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
 
 # reset reason / heap in HA, to see why the frame rebooted
 debug:
@@ -1326,9 +1331,9 @@ display:
     auto_clear_enabled: False
     update_interval: never
     #update_interval: 1min
-    # page changes get a full refresh (full_next); this caps the partial
-    # same-page redraws (one a minute while someone's around) in between
-    full_update_every: 30
+    # full refreshes are decided in mainLoop: nobody on the main floor for an
+    # hour, 3am at night, or a page change an hour after the last one
+    full_update_every: 0
 
     ckv_pin: 32
     sph_pin: 33
@@ -2059,7 +2064,7 @@ script:
             id(page_idx) = forced;
             if (forced == 2) id(hike_set) = (id(hike_set) + 1) % 3;
             id(draw_now) = true;
-            id(full_next) = true;
+            id(full_next) = millis() - id(last_full_ms) > 60UL * 60UL * 1000UL;
             return;
           }
           for (int step = 1; step <= NUM_PAGES; step++) {
@@ -2069,7 +2074,7 @@ script:
           // each visit to the hiking page shows the next six trails
           if (id(page_idx) == 2) id(hike_set) = (id(hike_set) + 1) % 3;
           id(draw_now) = true;
-          id(full_next) = true;
+          id(full_next) = millis() - id(last_full_ms) > 60UL * 60UL * 1000UL;
       - script.execute: mainLoop
 
   # snow depth at the house from Open-Meteo (meters -> inches)
@@ -2239,7 +2244,7 @@ script:
                 condition:
                   lambda: |-
                     if (!id(initial_draw_done)) return true;
-                    // a new page (10-minute rotation or a button press)
+                    // a new page, and the last full refresh was over an hour ago
                     if (id(full_next)) return true;
                     if (id(eff_mode) == "night") {
                       auto t = id(esptime).now();
@@ -2248,7 +2253,9 @@ script:
                     return !id(main_floor_recent).state;
                 then:
                   - logger.log: "e-ink display - full refresh"
-                  - lambda: id(inkplate_display).block_partial();
+                  - lambda: |-
+                      id(inkplate_display).block_partial();
+                      id(last_full_ms) = millis();
             - display.page.show: weather_page1
             - component.update: inkplate_display
             - globals.set:
